@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20', '22']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # better-sqlite3 is a native module and is compiled here, so this also
+      # catches the "prebuilt binary does not match this Node version" class of
+      # breakage that only shows up on a fresh machine.
+      - run: npm ci
+
+      - run: npm run build
+
+      # Excludes the drand quicknet integration tests: they need network access
+      # and would make CI fail on someone else's outage rather than on our code.
+      # Run them with LASTPUB_INTEGRATION=1 locally before a release.
+      - run: npm test
