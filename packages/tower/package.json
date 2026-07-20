@@ -1,0 +1,30 @@
+{
+  "name": "@lastpub/tower",
+  "version": "0.0.1",
+  "description": "lastpub reference scheduler (tower): kind 5905 jobs, withholding store, kind 1042 check-ins, trigger broadcast",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "lastpub-tower": "dist/main.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@lastpub/core": "*",
+    "better-sqlite3": "^11.5.0",
+    "nostr-tools": "^2.10.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^20.14.0",
+    "@types/ws": "^8.5.12",
+    "typescript": "^5.5.0",
+    "vitest": "^2.1.0"
+  }
+}

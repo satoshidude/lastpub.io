@@ -1,0 +1,20 @@
+{
+  "name": "lastpub",
+  "private": true,
+  "version": "0.0.1",
+  "description": "lastpub — publish after silence. Dead man's switch on Nostr.",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "dev-stack": "node scripts/dev-stack.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
