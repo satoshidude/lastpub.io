@@ -14,6 +14,8 @@ export type JobRow = {
   id: number
   request_id: string
   author: string
+  /** Per-message slot; '' for the classic one-job-per-author case. */
+  slot: string
   wrap_json: string
   wrap_id: string
   publish_at: number
@@ -30,6 +32,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   id INTEGER PRIMARY KEY,
   request_id TEXT UNIQUE NOT NULL,
   author TEXT NOT NULL,
+  slot TEXT NOT NULL DEFAULT '',
   wrap_json TEXT NOT NULL,
   wrap_id TEXT NOT NULL,
   publish_at INTEGER NOT NULL,
@@ -41,7 +44,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   updated_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_due ON jobs(status, publish_at);
-CREATE INDEX IF NOT EXISTS idx_jobs_author ON jobs(author);
+CREATE INDEX IF NOT EXISTS idx_jobs_author_slot ON jobs(author, slot);
 
 CREATE TABLE IF NOT EXISTS checkins (
   author TEXT PRIMARY KEY,
@@ -61,6 +64,16 @@ export class TowerDb {
     this.db = new Database(path)
     this.db.pragma('journal_mode = WAL')
     this.db.exec(SCHEMA)
+    this.migrate()
+  }
+
+  /** Additive migrations for DBs created before a column existed. */
+  private migrate(): void {
+    const cols = this.db.prepare('PRAGMA table_info(jobs)').all() as { name: string }[]
+    if (!cols.some((c) => c.name === 'slot')) {
+      this.db.exec("ALTER TABLE jobs ADD COLUMN slot TEXT NOT NULL DEFAULT ''")
+      this.db.exec('CREATE INDEX IF NOT EXISTS idx_jobs_author_slot ON jobs(author, slot)')
+    }
   }
 
   getJobByRequestId(requestId: string): JobRow | undefined {
@@ -74,29 +87,34 @@ export class TowerDb {
   }
 
   /**
-   * One switch per npub (§3.2): a new job atomically replaces the same
-   * author's existing scheduled jobs (implicit cancellation).
+   * Job acceptance (§3.2): a new job atomically replaces the same author's
+   * existing scheduled job *for the same slot* (implicit renewal). Distinct
+   * slots coexist, so one author can hold several withheld messages; the
+   * default slot '' reproduces the classic one-job-per-author behaviour.
    */
   insertJob(args: {
     requestId: string
     author: string
+    slot?: string
     wrap: Event
     publishAt: number
     relays: string[]
     now: number
   }): void {
+    const slot = args.slot ?? ''
     const tx = this.db.transaction(() => {
       this.db
-        .prepare("DELETE FROM jobs WHERE author = ? AND status = 'scheduled'")
-        .run(args.author)
+        .prepare("DELETE FROM jobs WHERE author = ? AND slot = ? AND status = 'scheduled'")
+        .run(args.author, slot)
       this.db
         .prepare(
-          `INSERT INTO jobs (request_id, author, wrap_json, wrap_id, publish_at, relays_json, status, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, 'scheduled', ?, ?)`,
+          `INSERT INTO jobs (request_id, author, slot, wrap_json, wrap_id, publish_at, relays_json, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'scheduled', ?, ?)`,
         )
         .run(
           args.requestId,
           args.author,
+          slot,
           JSON.stringify(args.wrap),
           args.wrap.id,
           args.publishAt,

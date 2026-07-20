@@ -75,13 +75,17 @@ describe('Tower', () => {
     })
   })
 
-  async function submitJob(publishAtOffset = 3600): Promise<{ job: VerifiedEvent; wrap: VerifiedEvent }> {
+  async function submitJob(
+    publishAtOffset = 3600,
+    slot?: string,
+  ): Promise<{ job: VerifiedEvent; wrap: VerifiedEvent }> {
     const wrap = await fakeWrap(author, recipientPub)
     const job = await buildJobRequest(author, {
       wrap,
       publishAt: now + publishAtOffset,
       relays: ['wss://client.example'],
       tower: towerPub,
+      slot,
     })
     return { job, wrap }
   }
@@ -109,13 +113,35 @@ describe('Tower', () => {
       expect(db.hasAnyJob(authorPub)).toBe(true)
     })
 
-    it('one switch per npub: new job replaces old scheduled job', async () => {
+    it('same slot: new job replaces the old scheduled job (renewal)', async () => {
       const a = await submitJob(3600)
       const b = await submitJob(7200)
       await tower.handleEvent(a.job)
       await tower.handleEvent(b.job)
       expect(db.getJobByRequestId(a.job.id)).toBeUndefined()
       expect(db.getJobByRequestId(b.job.id)?.publish_at).toBe(now + 7200)
+    })
+
+    it('distinct slots coexist: several messages per author', async () => {
+      const a = await submitJob(3600, 'msg-a')
+      const b = await submitJob(7200, 'msg-b')
+      await tower.handleEvent(a.job)
+      await tower.handleEvent(b.job)
+      // Neither displaces the other — two withheld jobs for one author.
+      expect(db.getJobByRequestId(a.job.id)?.publish_at).toBe(now + 3600)
+      expect(db.getJobByRequestId(b.job.id)?.publish_at).toBe(now + 7200)
+      // Renewing slot msg-a replaces only its own job, leaves msg-b untouched.
+      const a2 = await submitJob(9000, 'msg-a')
+      await tower.handleEvent(a2.job)
+      expect(db.getJobByRequestId(a.job.id)).toBeUndefined()
+      expect(db.getJobByRequestId(a2.job.id)?.publish_at).toBe(now + 9000)
+      expect(db.getJobByRequestId(b.job.id)?.publish_at).toBe(now + 7200)
+    })
+
+    it('records the slot on the job row', async () => {
+      const { job } = await submitJob(3600, 'slot-x')
+      await tower.handleEvent(job)
+      expect(db.getJobByRequestId(job.id)?.slot).toBe('slot-x')
     })
 
     it('publish_at in the past → 7000 error', async () => {

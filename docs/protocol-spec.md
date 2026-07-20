@@ -275,6 +275,7 @@ CREATE TABLE jobs (
   id INTEGER PRIMARY KEY,
   request_id TEXT UNIQUE NOT NULL,     -- 5905 event ID
   author TEXT NOT NULL,                -- author pubkey (from 5905 signature)
+  slot TEXT NOT NULL DEFAULT '',       -- per-message slot; '' = single message
   wrap_json TEXT NOT NULL,             -- withheld 1059
   wrap_id TEXT NOT NULL,
   publish_at INTEGER NOT NULL,
@@ -287,6 +288,7 @@ CREATE TABLE jobs (
   updated_at INTEGER NOT NULL
 );
 CREATE INDEX idx_jobs_due ON jobs(status, publish_at);
+CREATE INDEX idx_jobs_author_slot ON jobs(author, slot);
 
 CREATE TABLE checkins (
   author TEXT PRIMARY KEY,
@@ -305,7 +307,9 @@ CREATE TABLE seen_events (             -- replay/dedup window
 1. NIP-44 decrypt the request, verify signature.
 2. `verifyCapsuleWrap` on the embedded 1059 (structural check without content).
 3. Consistency: `publish_at` in the future; the wrap's round is not verifiable (it is inside the rumor) — deliberate: the tower does not know the round (withholding + privacy). Responsibility for the invariant lies with the client (`@lastpub/core` enforces it).
-4. **One switch per npub:** if a `scheduled` job of the same author already exists, the new job replaces the old one atomically (implicit cancellation — covers the case "Kind 5 got lost").
+4. **One job per (author, slot):** the request MAY carry a `["param","slot",<id>]` (inside the encrypted payload, so only the tower sees it). The tower keys scheduled jobs on `(author, slot)`; a new job atomically replaces the same author's existing `scheduled` job **for the same slot** (implicit renewal). Distinct slots coexist, so one author can hold several withheld messages at once, each with its own trigger. An omitted slot defaults to `""`, which reproduces the classic one-job-per-author behaviour.
+
+   Consequence for lost cancellations: with per-slot keying, a new job for slot A no longer displaces a stale job for slot B, so the old "any new job cancels everything" self-healing (§3.5) no longer covers a lost `Kind 5`. Deleting a message is therefore complete only once its `cancelled` feedback is observed (mirrors the success rule, §4.3); the client's retry journal re-sends unconfirmed cancellations. On check-in the client renews every currently active slot, so each live message's job is refreshed.
 5. Persist, then send 7000 `success/scheduled`. Order matters: commit first, then confirmation (the confirmation is the stage-5 commitment of the success rule).
 
 ### 3.3 1042 processing

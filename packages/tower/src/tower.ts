@@ -15,6 +15,7 @@ import {
 } from '@lastpub/core'
 import { TowerDb, type JobRow } from './db.js'
 import type { Transport } from './transport.js'
+import type { TowerObserver } from './observer.js'
 
 export type TowerOptions = {
   signer: Signer
@@ -24,6 +25,8 @@ export type TowerOptions = {
   now?: () => number
   /** Backoff between broadcast retries (seconds). */
   retryDelaySec?: number
+  /** Optional passive observer of tower lifecycle events. */
+  observer?: TowerObserver
 }
 
 /**
@@ -80,11 +83,13 @@ export class Tower {
     this.opts.db.insertJob({
       requestId: job.requestId,
       author: job.author,
+      slot: job.slot,
       wrap: job.wrap,
       publishAt: job.publishAt,
       relays: job.relays,
       now,
     })
+    this.opts.observer?.onScheduled?.(job.author, job.publishAt, job.slot)
     return [await this.feedback(job.author, job.requestId, 'success', 'scheduled')]
   }
 
@@ -127,6 +132,7 @@ export class Tower {
     if (!this.opts.db.hasAnyJob(inner.pubkey)) return []
 
     this.opts.db.recordCheckin(inner.pubkey, inner.created_at, inner.id, now)
+    this.opts.observer?.onCheckin?.(inner.pubkey, inner.created_at)
     return []
   }
 
@@ -156,6 +162,7 @@ export class Tower {
 
       this.opts.db.markPublished(job.id, wrap.id, now)
       responses.push(await this.result(job, wrap.id))
+      this.opts.observer?.onTriggered?.(job.author, wrap.id, job.publish_at)
     }
     return responses
   }

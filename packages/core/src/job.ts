@@ -10,12 +10,16 @@ import type { Event, VerifiedEvent } from './types.js'
  */
 export async function buildJobRequest(
   signer: Signer,
-  args: { wrap: Event; publishAt: number; relays: string[]; tower: string },
+  args: { wrap: Event; publishAt: number; relays: string[]; tower: string; slot?: string },
 ): Promise<VerifiedEvent> {
   const payloadTags = [
     ['i', JSON.stringify(args.wrap), 'text'],
     ['param', 'relays', ...args.relays],
     ['param', 'publish_at', String(args.publishAt)],
+    // Slot: stable per-message identifier so a switch can carry several
+    // messages, each its own withheld job. Omitted → default slot '', which
+    // gives the classic one-job-per-author behaviour. Encrypted to the tower.
+    ...(args.slot ? [['param', 'slot', args.slot]] : []),
   ]
   return signer.signEvent({
     kind: KIND_JOB,
@@ -34,6 +38,8 @@ export type JobRequest = {
   wrap: Event
   publishAt: number
   relays: string[]
+  /** Per-message slot; '' when the client sends a single message per author. */
+  slot: string
 }
 
 /** Tower side (spec §3.2): decrypt request + check structure. */
@@ -52,6 +58,7 @@ export async function decryptJobRequest(towerSigner: Signer, e: Event): Promise<
   const iTag = payloadTags.find((t) => t[0] === 'i')
   const relaysTag = payloadTags.find((t) => t[0] === 'param' && t[1] === 'relays')
   const publishAtTag = payloadTags.find((t) => t[0] === 'param' && t[1] === 'publish_at')
+  const slotTag = payloadTags.find((t) => t[0] === 'param' && t[1] === 'slot')
   if (!iTag || !publishAtTag) {
     throw new LastpubError('ERR_WRAP_INVALID', 'job request missing i or publish_at')
   }
@@ -70,6 +77,7 @@ export async function decryptJobRequest(towerSigner: Signer, e: Event): Promise<
     wrap,
     publishAt,
     relays: relaysTag ? relaysTag.slice(2) : [],
+    slot: slotTag?.[2] ?? '',
   }
 }
 
