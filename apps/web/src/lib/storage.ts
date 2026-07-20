@@ -7,6 +7,21 @@ export type Settings = {
   towerNpub: string
 }
 
+/**
+ * Defaults for a fresh visitor, baked in at build time so a deployment can
+ * point at its own relay and tower without patching source. Both fall back to
+ * the local dev stack (see scripts/dev-stack.mjs). Settings the user saves
+ * always win — these only fill an empty localStorage.
+ */
+const DEFAULT_RELAYS: string[] = (
+  import.meta.env?.VITE_DEFAULT_RELAYS ?? 'ws://127.0.0.1:7777'
+)
+  .split(',')
+  .map((s: string) => s.trim())
+  .filter(Boolean)
+
+const DEFAULT_TOWER_NPUB: string = import.meta.env?.VITE_DEFAULT_TOWER_NPUB ?? ''
+
 /** A message: its own recipient, draft, capsule and 5905 job. */
 export type MessageData = {
   id: string
@@ -97,7 +112,10 @@ function migrateSwitch(raw: unknown): SwitchData | null {
 
 export const storage = {
   loadSettings: (): Settings =>
-    read<Settings>(KEYS.settings) ?? { relays: ['ws://127.0.0.1:7777'], towerNpub: '' },
+    read<Settings>(KEYS.settings) ?? {
+      relays: [...DEFAULT_RELAYS],
+      towerNpub: DEFAULT_TOWER_NPUB,
+    },
   saveSettings: (s: Settings) => localStorage.setItem(KEYS.settings, JSON.stringify(s)),
   loadSwitch: (): SwitchData | null => migrateSwitch(read(KEYS.switch)),
   saveSwitch: (s: SwitchData) => localStorage.setItem(KEYS.switch, JSON.stringify(s)),
