@@ -147,7 +147,7 @@
       return
     }
     confirmDelete = false
-    void run('Deleting …', async () => {
+    void run('Deleting message …', async () => {
       await client!.deleteSwitch(sw!)
       sw = null
     })
@@ -172,12 +172,25 @@
     <summary>Settings</summary>
     <label>
       Relays (comma-separated)
-      <input bind:value={relaysInput} placeholder="ws://127.0.0.1:7777" />
+      <input bind:value={relaysInput} placeholder="wss://nos.lol, wss://relay.damus.io" />
     </label>
+    <p class="muted small help">
+      WebSocket URLs of the nostr relays this app publishes to and reads from. Use relays
+      that accept writes from anyone — public ones like <code>wss://nos.lol</code> or
+      <code>wss://relay.damus.io</code>, or your own. The tower must be reachable on at
+      least one of them. This demo is preconfigured with public relays.
+    </p>
     <label>
       Tower npub
       <input bind:value={settings.towerNpub} placeholder="npub1…" />
     </label>
+    <p class="muted small help">
+      The public key of the scheduler (“tower”) that holds your sealed message and
+      publishes it if you fall silent. It is a separate service you have to trust — not
+      your own key, and not a relay. Get one from a tower operator, or run your own with
+      <code>npm run dev-stack</code>, which prints its npub. This demo is preconfigured
+      with a public reference tower.
+    </p>
     <button class="secondary" on:click={saveSettings}>Save</button>
   </details>
 
@@ -200,10 +213,11 @@
 
     {#if !sw}
       <div class="panel">
-        <h2>Create switch</h2>
+        <h2>Your switch</h2>
         <p class="muted small">
-          The switch is your timer: if you don't check in within the interval, your
-          stored message is delivered.
+          The switch is your timer. Set the interval, add a message, and check in before
+          the deadline — miss it and the message is delivered. There is no message yet, so
+          the switch is idle.
         </p>
         <label>
           Interval / revocation window
@@ -213,7 +227,7 @@
             <option value={2}>90 days / 7 days — long-term</option>
           </select>
         </label>
-        <h3>Message</h3>
+        <h3>Add a message</h3>
         <label>
           Recipient (npub)
           <input bind:value={recipientNpub} placeholder="npub1…" />
@@ -223,7 +237,7 @@
           <textarea rows="6" bind:value={message}></textarea>
         </label>
         <button on:click={doCreate} disabled={!!busy || !message || !recipientNpub}>
-          Seal &amp; store
+          Seal &amp; arm the switch
         </button>
       </div>
     {:else}
@@ -262,12 +276,6 @@
           >
             {phase === 'ACTIVE' ? 'Check-in' : 'Check-in & revoke'}
           </button>
-          <button class="danger" on:click={doDelete} disabled={!!busy}>
-            {confirmDelete ? 'Really delete? (silent, recipients learn nothing)' : 'Delete'}
-          </button>
-          {#if confirmDelete}
-            <button class="secondary" on:click={() => (confirmDelete = false)}>Cancel</button>
-          {/if}
         </div>
         <p class="muted small">
           Check-in anchor: {fmt(sw.lastCheckinAt)} · Interval {sw.interval / 86400} d · Grace
@@ -322,10 +330,22 @@
                   >Edit</button
                 >
                 <button class="secondary" on:click={() => doExport(msg.id)}>Export</button>
+                <button class="danger" on:click={doDelete} disabled={!!busy}>
+                  {confirmDelete
+                    ? 'Really delete? (silent — the recipient learns nothing)'
+                    : 'Delete message'}
+                </button>
+                {#if confirmDelete}
+                  <button class="secondary" on:click={() => (confirmDelete = false)}>Cancel</button>
+                {/if}
               </div>
             {/if}
           </div>
         {/each}
+        <p class="muted small">
+          Deleting a message cancels its job silently and leaves the switch idle — the
+          recipient is never notified. The timer settings stay; you can add a new message.
+        </p>
       </div>
     {/if}
 
@@ -424,6 +444,10 @@
   }
   .small {
     font-size: 0.8rem;
+  }
+  .help {
+    margin: -0.4rem 0 0.75rem;
+    line-height: 1.45;
   }
   code {
     font-size: 0.85em;
