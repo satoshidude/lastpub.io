@@ -44,7 +44,9 @@ CREATE TABLE IF NOT EXISTS jobs (
   updated_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_due ON jobs(status, publish_at);
-CREATE INDEX IF NOT EXISTS idx_jobs_author_slot ON jobs(author, slot);
+-- The (author, slot) index is created in migrate(), after the slot column is
+-- guaranteed: a DB created before the slot column exists would fail this index
+-- here, since IF NOT EXISTS on the table skips adding the column.
 
 CREATE TABLE IF NOT EXISTS checkins (
   author TEXT PRIMARY KEY,
@@ -72,8 +74,10 @@ export class TowerDb {
     const cols = this.db.prepare('PRAGMA table_info(jobs)').all() as { name: string }[]
     if (!cols.some((c) => c.name === 'slot')) {
       this.db.exec("ALTER TABLE jobs ADD COLUMN slot TEXT NOT NULL DEFAULT ''")
-      this.db.exec('CREATE INDEX IF NOT EXISTS idx_jobs_author_slot ON jobs(author, slot)')
     }
+    // Always after the column is guaranteed (fresh or migrated), so the index
+    // never references a column that does not exist yet.
+    this.db.exec('CREATE INDEX IF NOT EXISTS idx_jobs_author_slot ON jobs(author, slot)')
   }
 
   getJobByRequestId(requestId: string): JobRow | undefined {
