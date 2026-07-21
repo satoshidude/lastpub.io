@@ -10,7 +10,7 @@
     "apps/*"
   ],
   "scripts": {
-    "build": "npm run build --workspaces --if-present",
+    "build": "npm run build -w @lastpub/core && npm run build --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "dev-stack": "node scripts/dev-stack.mjs"
   },
