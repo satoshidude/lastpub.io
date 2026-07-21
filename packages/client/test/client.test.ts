@@ -5,29 +5,37 @@ import * as nip19 from 'nostr-tools/nip19'
 import WebSocket from 'ws'
 import { LocalSigner, unwrapCapsule, decryptCapsule } from '@lastpub/core'
 import { MiniRelay, startTower, type RunningTower } from '@lastpub/tower'
-import { LastpubClient } from '../src/lib/client.js'
-import { storage } from '../src/lib/storage.js'
+import { LastpubClient } from '../src/client.js'
+import type { PendingStage5, StorageAdapter, SwitchData } from '../src/types.js'
 
 useWebSocketImplementation(WebSocket)
 
 /**
- * E2E of the web app flows (§4) without a browser: LastpubClient with
- * LocalSigner instead of NIP-07, real capsule crypto (tlock offline), real
- * tower via mini-relay. localStorage is shimmed.
+ * E2E of the client flows (§4): LastpubClient with LocalSigner instead of
+ * NIP-07, real capsule crypto (tlock offline), real tower via mini-relay, and
+ * an in-memory StorageAdapter in place of a browser's localStorage.
  */
-const store = new Map<string, string>()
-globalThis.localStorage = {
-  getItem: (k: string) => store.get(k) ?? null,
-  setItem: (k: string, v: string) => void store.set(k, v),
-  removeItem: (k: string) => void store.delete(k),
-  clear: () => store.clear(),
-  key: () => null,
-  length: 0,
-} as Storage
+class MemoryStore implements StorageAdapter {
+  switch: SwitchData | null = null
+  pending: PendingStage5 | null = null
+  saveSwitch(s: SwitchData) {
+    this.switch = s
+  }
+  savePending(p: PendingStage5) {
+    this.pending = p
+  }
+  clearPending() {
+    this.pending = null
+  }
+  clearSwitch() {
+    this.switch = null
+  }
+}
 
 describe('LastpubClient E2E (Mini-Relay + Tower)', () => {
   let relay: MiniRelay
   let running: RunningTower
+  let store: MemoryStore
   let client: LastpubClient
   let author: LocalSigner
   let recipientSk: Uint8Array
@@ -42,10 +50,12 @@ describe('LastpubClient E2E (Mini-Relay + Tower)', () => {
     })
     author = new LocalSigner(generateSecretKey())
     recipientSk = generateSecretKey()
-    client = new LastpubClient(author, {
-      relays: [relay.url],
-      towerNpub: nip19.npubEncode(running.towerPub),
-    })
+    store = new MemoryStore()
+    client = new LastpubClient(
+      author,
+      { relays: [relay.url], towerNpub: nip19.npubEncode(running.towerPub) },
+      store,
+    )
   })
 
   afterAll(async () => {
@@ -70,7 +80,9 @@ describe('LastpubClient E2E (Mini-Relay + Tower)', () => {
     expect(sw.messages).toHaveLength(1)
     const firstMsg = sw.messages[0]
     expect(running.db.getJobByRequestId(firstMsg.requestId)?.status).toBe('scheduled')
-    expect(storage.loadSwitch()?.messages[0]?.requestId).toBe(firstMsg.requestId)
+    // job is keyed to the message's own slot (§3.2)
+    expect(running.db.getJobByRequestId(firstMsg.requestId)?.slot).toBe(firstMsg.id)
+    expect(store.switch?.messages[0]?.requestId).toBe(firstMsg.requestId)
 
     // Capsule is a real 1041 capsule, unwrappable by the recipient
     const { rumor, round } = await unwrapCapsule(recipient, firstMsg.wrap)
@@ -94,7 +106,7 @@ describe('LastpubClient E2E (Mini-Relay + Tower)', () => {
     expect(running.db.getJobByRequestId(before)).toBeUndefined()
     expect(running.db.getJobByRequestId(afterMsg.requestId)?.status).toBe('scheduled')
     expect(running.db.lastCheckinAt(authorPub)).toBe(after.lastCheckinAt)
-    expect(storage.loadPending()).toBeNull() // success rule satisfied → journal empty
+    expect(store.pending).toBeNull() // success rule satisfied → journal empty
     expect((await client.readDraft(after)).message).toBe('second draft')
 
     // the recipient would get the edited version (draft chain is correct)
@@ -109,6 +121,6 @@ describe('LastpubClient E2E (Mini-Relay + Tower)', () => {
     // delete (§4.4): silent, job hard gone
     await client.deleteSwitch(after)
     expect(running.db.getJobByRequestId(afterMsg.requestId)).toBeUndefined()
-    expect(storage.loadSwitch()).toBeNull()
+    expect(store.switch).toBeNull()
   }, 30_000)
 })

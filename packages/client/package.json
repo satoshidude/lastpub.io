@@ -1,0 +1,33 @@
+{
+  "name": "@lastpub/client",
+  "version": "0.0.1",
+  "description": "lastpub client flows: create, check-in, revoke, export — framework-agnostic, pluggable storage",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@lastpub/core": "*",
+    "nostr-tools": "^2.10.0"
+  },
+  "devDependencies": {
+    "@lastpub/tower": "*",
+    "typescript": "^5.5.0",
+    "vitest": "^2.1.0",
+    "ws": "^8.18.0"
+  }
+}

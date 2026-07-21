@@ -18,19 +18,21 @@ import {
   type Rumor,
   type Signer,
 } from '@lastpub/core'
-import {
-  storage,
-  type MessageData,
-  type PendingItem,
-  type PendingStage5,
-  type Settings,
-  type SwitchData,
-} from './storage.js'
+import type {
+  ClientOptions,
+  MessageData,
+  PendingItem,
+  PendingStage5,
+  Settings,
+  StorageAdapter,
+  SwitchData,
+} from './types.js'
 
 /**
- * Client flows of the web app (spec §4). No plaintext leaves the browser.
- * Switch (time model, check-in) and message (recipient, draft, capsule, job)
- * are kept separate; the switch owns the trigger.
+ * lastpub client flows (spec §4). No plaintext leaves the process. Switch
+ * (time model, check-in) and message (recipient, draft, capsule, job) are kept
+ * separate; the switch owns the trigger. Framework-agnostic: crypto comes from
+ * a Signer, persistence from a StorageAdapter.
  */
 
 export class FeedbackError extends Error {
@@ -45,6 +47,8 @@ export class LastpubClient {
   constructor(
     readonly signer: Signer,
     readonly settings: Settings,
+    private readonly storage: StorageAdapter,
+    private readonly options: ClientOptions = {},
   ) {}
 
   get towerPub(): string {
@@ -59,19 +63,18 @@ export class LastpubClient {
   }
 
   /**
-   * Exactly one message per switch. The storage shape is already 1:n, but the
-   * transport is not: a tower keys scheduled jobs solely by author (§3.2 rule
-   * 4) and deletes older ones on insert. A second job would silently replace
-   * the first and still confirm 'scheduled' — the success rule would then
-   * report success for a message that is no longer scheduled. Hence a hard
-   * abort instead of losing data quietly.
+   * Product policy for the minimal client: one message per switch. The
+   * transport supports more — the tower keys jobs by (author, slot) and each
+   * message carries its own slot (§3.2) — so a richer client sets
+   * `allowMultipleMessages`. When it is off, refuse a multi-message switch
+   * rather than surprise the user with a scope the UI does not cover.
    */
   private assertSingleMessage(current: SwitchData): void {
+    if (this.options.allowMultipleMessages) return
     if (current.messages.length > 1) {
       throw new Error(
-        `This switch carries ${current.messages.length} messages. A tower schedules ` +
-          'only one message per npub (§3.2 rule 4) — any further one would silently ' +
-          'displace the previous one.',
+        `This switch carries ${current.messages.length} messages, but this client is ` +
+          'configured for a single message per switch (set allowMultipleMessages to change).',
       )
     }
   }
@@ -145,6 +148,9 @@ export class LastpubClient {
       publishAt: args.publishAt,
       relays: this.settings.relays,
       tower: args.tower,
+      // Each message is its own slot on the tower, so several messages per
+      // switch coexist instead of overwriting one another (§3.2).
+      slot: args.messageId,
     })
     return {
       messageId: args.messageId,
@@ -219,7 +225,7 @@ export class LastpubClient {
         },
       ],
     }
-    storage.saveSwitch(data)
+    this.storage.saveSwitch(data)
     return data
   }
 
@@ -285,7 +291,7 @@ export class LastpubClient {
       roundTime: schedule.roundTime,
       items,
     }
-    storage.savePending(pending)
+    this.storage.savePending(pending)
     return this.completeStage5(current, pending)
   }
 
@@ -334,8 +340,8 @@ export class LastpubClient {
       roundTime: pending.roundTime,
       messages,
     }
-    storage.saveSwitch(data)
-    storage.clearPending()
+    this.storage.saveSwitch(data)
+    this.storage.clearPending()
     return data
   }
 
@@ -347,8 +353,8 @@ export class LastpubClient {
       await this.publish(cancel)
       await this.awaitFeedback(tower, msg.requestId, 'cancelled')
     }
-    storage.clearSwitch()
-    storage.clearPending()
+    this.storage.clearSwitch()
+    this.storage.clearPending()
   }
 
   /** Decrypt a message's draft (e.g. to prefill the edit field). */

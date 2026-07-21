@@ -73,6 +73,7 @@ LASTPUB_INTEGRATION=1 npm test -w @lastpub/core
 | Path | Contents |
 |---|---|
 | `packages/core` | protocol and crypto library (create → renew → verify → unwrap → decrypt) |
+| `packages/client` | client flows (create, check-in, revoke, export) — framework-agnostic, pluggable storage |
 | `packages/tower` | reference scheduler (5905 jobs, withholding store, 1042 check-ins, trigger broadcast) |
 | `apps/web` | minimal UI (create, check-in, revoke, export) |
 | `apps/decrypt` | standalone decrypt page (nevent + export file, static) |

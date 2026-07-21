@@ -13,6 +13,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@lastpub/client": "*",
     "@lastpub/core": "*",
     "nostr-tools": "^2.10.0"
   },

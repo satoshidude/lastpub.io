@@ -1,11 +1,17 @@
 import type { Event } from '@lastpub/core'
+import type {
+  MessageData,
+  PendingStage5,
+  Settings,
+  StorageAdapter,
+  SwitchData,
+} from '@lastpub/client'
 
 /** Web app persistence (localStorage): settings, switch state, journal. */
 
-export type Settings = {
-  relays: string[]
-  towerNpub: string
-}
+// Domain types live in @lastpub/client; re-exported so existing imports of
+// `./storage.js` keep resolving.
+export type { MessageData, PendingItem, PendingStage5, Settings, SwitchData } from '@lastpub/client'
 
 /**
  * Defaults for a fresh visitor, baked in at build time so a deployment can
@@ -21,54 +27,6 @@ const DEFAULT_RELAYS: string[] = (
   .filter(Boolean)
 
 const DEFAULT_TOWER_NPUB: string = import.meta.env?.VITE_DEFAULT_TOWER_NPUB ?? ''
-
-/** A message: its own recipient, draft, capsule and 5905 job. */
-export type MessageData = {
-  id: string
-  recipient: string // hex
-  requestId: string
-  wrap: Event
-  /** Ephemeral secret of the current wrap — the only key for the NIP-09 revocation (§4.4). */
-  wrapEphemeralKey: string
-  draftWrap: Event
-  /** Permanent after a false trigger: concealment toward this recipient broken (§4.4). */
-  concealmentBroken: boolean
-}
-
-/** The switch: time model + check-in anchor. One switch per npub. */
-export type SwitchData = {
-  switchId: string
-  /** Tower pubkey (hex), fixed at creation — independent of later settings changes. */
-  towerPub: string
-  interval: number
-  grace: number
-  lastCheckinAt: number
-  publishAt: number
-  roundTime: number
-  messages: MessageData[]
-}
-
-/**
- * Journal for the success rule (§4.3): fully signed stage-5 events are
- * persisted before sending — a retry repeats only stage 5, without a new
- * NIP-07 cycle. One entry per message.
- */
-export type PendingItem = {
-  messageId: string
-  recipient: string
-  cancel: Event | null
-  job: Event
-  wrap: Event
-  wrapEphemeralKey: string
-  draftWrap: Event
-}
-
-export type PendingStage5 = {
-  checkinAt: number
-  publishAt: number
-  roundTime: number
-  items: PendingItem[]
-}
 
 const KEYS = { settings: 'lastpub.settings', switch: 'lastpub.switch', pending: 'lastpub.pending' }
 

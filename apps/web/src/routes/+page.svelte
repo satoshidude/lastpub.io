@@ -2,7 +2,7 @@
   import { onDestroy, onMount } from 'svelte'
   import * as nip19 from 'nostr-tools/nip19'
   import { PRESETS, nip07Signer, type Signer } from '@lastpub/core'
-  import { LastpubClient, FeedbackError } from '$lib/client.js'
+  import { LastpubClient, FeedbackError } from '@lastpub/client'
   import { storage, type PendingStage5, type Settings, type SwitchData } from '$lib/storage.js'
 
   let settings: Settings = { relays: [], towerNpub: '' }
@@ -69,7 +69,7 @@
   function saveSettings(): void {
     settings.relays = relaysInput.split(',').map((s) => s.trim()).filter(Boolean)
     storage.saveSettings(settings)
-    if (signer) client = new LastpubClient(signer, settings)
+    if (signer) client = new LastpubClient(signer, settings, storage)
   }
 
   async function login(): Promise<void> {
@@ -78,7 +78,7 @@
       if (!window.nostr) throw new Error('No NIP-07 extension found (Alby, nos2x, …)')
       signer = nip07Signer(window.nostr)
       pubkey = await signer.getPublicKey()
-      client = new LastpubClient(signer, settings)
+      client = new LastpubClient(signer, settings, storage)
     } catch (e) {
       error = e instanceof Error ? e.message : String(e)
     }
