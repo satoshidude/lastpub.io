@@ -121,4 +121,45 @@ describe('LastpubClient E2E (Mini-Relay + Tower)', () => {
     expect(running.db.getJobByRequestId(afterMsg.requestId)).toBeUndefined()
     expect(store.switch).toBeNull()
   }, 30_000)
+
+  it('restore from export and from relay reconstructs a resumable switch', async () => {
+    // A fresh author, so the relay view for restore is isolated.
+    const a = new LocalSigner(generateSecretKey())
+    const towerNpub = nip19.npubEncode(running.towerPub)
+    const rSk = generateSecretKey()
+    const origin = new LastpubClient(a, { relays: [relay.url], towerNpub }, new MemoryStore())
+    const sw = await origin.createSwitch({
+      message: 'recover me',
+      recipientNpub: nip19.npubEncode(getPublicKey(rSk)),
+      interval: 30 * 86400,
+    })
+    const msg = sw.messages[0]
+    const exp = origin.buildExportFile(sw)
+    origin.close()
+
+    // Fresh install #1: import the export file.
+    const storeX = new MemoryStore()
+    const fromExport = new LastpubClient(a, { relays: [relay.url], towerNpub }, storeX)
+    const rx = await fromExport.restoreFromExport(exp)
+    expect(rx.switchId).toBe(sw.switchId)
+    expect(rx.interval).toBe(30 * 86400)
+    expect(rx.towerPub).toBe(running.towerPub)
+    expect(rx.messages[0].recipient).toBe(msg.recipient)
+    expect(rx.messages[0].requestId).toBe(msg.requestId)
+    expect(rx.messages[0].wrap.id).toBe(msg.wrap.id)
+    expect(storeX.switch?.switchId).toBe(sw.switchId)
+    expect((await fromExport.readDraft(rx)).message).toBe('recover me')
+    fromExport.close()
+
+    // Fresh install #2: nothing but the key — rebuild from the relays.
+    const storeR = new MemoryStore()
+    const fromRelay = new LastpubClient(a, { relays: [relay.url], towerNpub }, storeR)
+    const rr = await fromRelay.restoreFromRelay()
+    expect(rr?.switchId).toBe(sw.switchId)
+    expect(rr?.towerPub).toBe(running.towerPub)
+    expect(rr?.messages[0].requestId).toBe(msg.requestId)
+    expect(rr?.messages[0].wrap.id).toBe(msg.wrap.id)
+    expect((await fromRelay.readDraft(rr!)).message).toBe('recover me')
+    fromRelay.close()
+  }, 30_000)
 })

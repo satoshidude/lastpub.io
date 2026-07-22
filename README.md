@@ -92,6 +92,13 @@ missed check-in is checking in on time; once the deadline passes, concealment to
 that recipient is permanently and immediately broken, whether the trigger was intended
 or not — the app says so rather than pretending otherwise.
 
+Switch state lives in the browser, but it is not the only copy: your drafts and the
+scheduled job are published to the relays, and the export file is a self-contained
+snapshot. On a new device or after clearing storage, sign in and **restore from relay**,
+or **import an export file**, to rebuild the switch and resume check-ins — against a
+different tower if you like. The standalone decrypt page reads a message from its nevent
+or export file alone, so a recipient never depends on this app or any single host.
+
 ## Standards
 
 Kind 1041 time capsules (Shugur draft) · kind 1042 check-in · NIP-44 v2 · NIP-59 ·

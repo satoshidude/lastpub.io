@@ -169,6 +169,27 @@
     a.click()
     URL.revokeObjectURL(a.href)
   }
+
+  let fileInput: HTMLInputElement
+
+  const doRestoreRelay = () =>
+    run('Recovering from the relays — please confirm decrypt prompts …', async () => {
+      const restored = await client!.restoreFromRelay()
+      if (!restored) {
+        error = 'No switch of yours was found on these relays. Try the relay you originally used, or import your export file.'
+        return
+      }
+      sw = restored
+    })
+
+  async function onImportFile(): Promise<void> {
+    const file = fileInput?.files?.[0]
+    if (!file) return
+    await run('Importing export file …', async () => {
+      sw = await client!.restoreFromExport(JSON.parse(await file.text()))
+    })
+    fileInput.value = ''
+  }
 </script>
 
 <main>
@@ -245,6 +266,29 @@
         <button on:click={doCreate} disabled={!!busy || !message || !recipientNpub}>
           Seal &amp; arm the switch
         </button>
+
+        <h3>Or recover an existing switch</h3>
+        <p class="muted small help">
+          Lost your local state — new device, other browser, cleared storage? Your switch
+          isn't gone: rebuild it from your key. Your drafts and the scheduled job live on
+          the relays, and an export file carries everything on its own. Either way you can
+          resume check-ins, even against a different tower.
+        </p>
+        <div class="row">
+          <button class="secondary" on:click={doRestoreRelay} disabled={!!busy}
+            >Restore from relay</button
+          >
+          <button class="secondary" on:click={() => fileInput.click()} disabled={!!busy}
+            >Import export file</button
+          >
+          <input
+            type="file"
+            accept="application/json,.json"
+            bind:this={fileInput}
+            on:change={onImportFile}
+            style="display:none"
+          />
+        </div>
       </div>
     {:else}
       <div class="panel">

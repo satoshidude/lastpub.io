@@ -2,6 +2,8 @@ import { SimplePool } from 'nostr-tools/pool'
 import * as nip19 from 'nostr-tools/nip19'
 import {
   KIND_FEEDBACK,
+  KIND_JOB,
+  KIND_WRAP,
   buildCancel,
   buildExport,
   buildJobRequest,
@@ -10,6 +12,7 @@ import {
   createCheckin,
   createDraftWrap,
   readDraftWrap,
+  verifyCapsuleWrap,
   wrapRumor,
   type Event,
   type LastpubDraft,
@@ -379,6 +382,137 @@ export class LastpubClient {
       : current.messages[0]
     if (!msg) throw new Error('Message not found')
     return msg
+  }
+
+  /**
+   * Rebuild switch state from an export file (§4.5), so an active switch can be
+   * resumed on a fresh install or device. The export carries the capsule, the
+   * job binding (tower + request id) and the draft — enough to reconstruct the
+   * full state and continue: a check-in cancels the old job by its request id
+   * and schedules a fresh one, even against a different tower.
+   */
+  async restoreFromExport(exp: LastpubExportV1): Promise<SwitchData> {
+    if (exp?.type !== 'lastpub-export' || exp.v !== 1) {
+      throw new Error('Not a lastpub export file')
+    }
+    if (!exp.draft_wrap) {
+      throw new Error('This export has no draft, so the switch cannot be resumed from it')
+    }
+    const draft = await readDraftWrap(this.signer, exp.draft_wrap)
+    const publishAt = exp.job.publish_at
+    const data: SwitchData = {
+      switchId: draft.switch_id,
+      towerPub: exp.job.tower,
+      interval: draft.interval,
+      lastCheckinAt: publishAt - draft.interval,
+      publishAt,
+      messages: [
+        {
+          id: crypto.randomUUID(),
+          recipient: draft.recipient,
+          requestId: exp.job.request_id,
+          wrap: exp.capsule.wrap,
+          wrapEphemeralKey: '',
+          draftWrap: exp.draft_wrap,
+          concealmentBroken: Math.floor(Date.now() / 1000) > publishAt,
+        },
+      ],
+    }
+    this.storage.saveSwitch(data)
+    return data
+  }
+
+  /**
+   * Rebuild switch state from the author's own events on the relays — the
+   * recovery path when there is no export and localStorage is gone. The draft
+   * (self-gift-wrapped kind 14) and the 5905 job are both published to relays;
+   * the job's payload is encrypted to the tower, but the author shares that
+   * NIP-44 conversation key and can read it back. Reconstructs the single
+   * current switch from the newest draft and the newest job. Returns null if no
+   * draft is found; throws if a draft exists but its job is not on these relays.
+   */
+  async restoreFromRelay(): Promise<SwitchData | null> {
+    const me = await this.signer.getPublicKey()
+
+    // Newest lastpub-draft among the self-addressed gift wraps.
+    const wraps = await this.pool.querySync(this.settings.relays, {
+      kinds: [KIND_WRAP],
+      '#p': [me],
+    })
+    let bestDraft: { draft: LastpubDraft; wrap: Event } | null = null
+    for (const w of wraps) {
+      try {
+        const d = await readDraftWrap(this.signer, w)
+        if (!bestDraft || d.updated_at > bestDraft.draft.updated_at) bestDraft = { draft: d, wrap: w }
+      } catch {
+        // not one of our drafts
+      }
+    }
+    if (!bestDraft) return null
+
+    // Newest 5905 job authored by us → tower (p tag), request id, and the
+    // encrypted payload (wrap + publish_at) which we decrypt with the tower key.
+    const jobs = await this.pool.querySync(this.settings.relays, {
+      kinds: [KIND_JOB],
+      authors: [me],
+    })
+    let bestJob: {
+      tower: string
+      requestId: string
+      wrap: Event
+      publishAt: number
+      createdAt: number
+    } | null = null
+    for (const j of jobs) {
+      const tower = j.tags.find((t) => t[0] === 'p')?.[1]
+      if (!tower) continue
+      try {
+        const tags = JSON.parse(await this.signer.nip44Decrypt(tower, j.content)) as string[][]
+        const iTag = tags.find((t) => t[0] === 'i')
+        const paTag = tags.find((t) => t[0] === 'param' && t[1] === 'publish_at')
+        if (!iTag || !paTag) continue
+        const wrap = JSON.parse(iTag[1]) as Event
+        if (!verifyCapsuleWrap(wrap).ok) continue
+        if (!bestJob || j.created_at > bestJob.createdAt) {
+          bestJob = {
+            tower,
+            requestId: j.id,
+            wrap,
+            publishAt: Number(paTag[2]),
+            createdAt: j.created_at,
+          }
+        }
+      } catch {
+        // not decryptable by us / not a job to a tower we can read
+      }
+    }
+    if (!bestJob) {
+      throw new Error(
+        'Recovered your message draft, but the scheduled job is not on these relays. ' +
+          'Import your export file instead, or add the relay you originally used.',
+      )
+    }
+
+    const data: SwitchData = {
+      switchId: bestDraft.draft.switch_id,
+      towerPub: bestJob.tower,
+      interval: bestDraft.draft.interval,
+      lastCheckinAt: bestJob.publishAt - bestDraft.draft.interval,
+      publishAt: bestJob.publishAt,
+      messages: [
+        {
+          id: crypto.randomUUID(),
+          recipient: bestDraft.draft.recipient,
+          requestId: bestJob.requestId,
+          wrap: bestJob.wrap,
+          wrapEphemeralKey: '',
+          draftWrap: bestDraft.wrap,
+          concealmentBroken: Math.floor(Date.now() / 1000) > bestJob.publishAt,
+        },
+      ],
+    }
+    this.storage.saveSwitch(data)
+    return data
   }
 
   close(): void {
