@@ -16,6 +16,8 @@
   let message = ''
   let recipientNpub = ''
   let presetIndex = 1
+  let reschedPresetIndex = 1
+  let reschedFor = ''
   let editingMessageId: string | null = null
   let editedMessage = ''
   let confirmDelete = false
@@ -36,13 +38,17 @@
     pending = storage.loadPending()
   })
 
-  $: phase = !sw
-    ? 'none'
-    : now <= sw.publishAt
-      ? 'ACTIVE'
-      : now <= sw.roundTime
-        ? 'TRIGGERED'
-        : 'RELEASED'
+  // Two phases only: withheld until the deadline, then published & readable at
+  // the same moment — there is no window in between.
+  $: phase = !sw ? 'none' : now <= sw.publishAt ? 'ACTIVE' : 'PUBLISHED'
+
+  // Sync the reschedule selector to the switch's current interval once per switch,
+  // so the user's later choice isn't overwritten on every clock tick.
+  $: if (sw && sw.switchId !== reschedFor) {
+    const i = PRESETS.findIndex((p) => p.interval === sw.interval)
+    reschedPresetIndex = i >= 0 ? i : 1
+    reschedFor = sw.switchId
+  }
 
   function neventOf(wrapId: string, wrapPubkey: string): string {
     return nip19.neventEncode({
@@ -109,7 +115,6 @@
         message,
         recipientNpub,
         interval: preset.interval,
-        grace: preset.grace,
       })
       message = ''
       recipientNpub = ''
@@ -126,6 +131,7 @@
       sw = await client!.checkin(
         sw!,
         editingMessageId ? { messageId: editingMessageId, message: editedMessage } : undefined,
+        { interval: PRESETS[reschedPresetIndex].interval },
       )
       pending = null
       editingMessageId = null
@@ -205,8 +211,8 @@
     {#if pending}
       <div class="banner warn">
         <strong>Check-in incomplete.</strong> The timer hasn't been confirmed yet — the
-        old capsule is still in the job, so the revocation window would be shortened on
-        trigger. Retry stage 5 now.
+        old capsule is still in the job and would fire at the old deadline. Retry stage 5
+        now.
         <button on:click={doRetry} disabled={!!busy}>Retry</button>
       </div>
     {/if}
@@ -216,15 +222,15 @@
         <h2>Your switch</h2>
         <p class="muted small">
           The switch is your timer. Set the interval, add a message, and check in before
-          the deadline — miss it and the message is delivered. There is no message yet, so
-          the switch is idle.
+          the deadline — miss it and the message is delivered and readable at once. There
+          is no message yet, so the switch is idle.
         </p>
         <label>
-          Interval / revocation window
+          Check-in interval
           <select bind:value={presetIndex}>
-            <option value={0}>7 days / 3 days — high attention</option>
-            <option value={1}>30 days / 5 days — standard</option>
-            <option value={2}>90 days / 7 days — long-term</option>
+            <option value={0}>7 days — high attention</option>
+            <option value={1}>30 days — standard</option>
+            <option value={2}>90 days — long-term</option>
           </select>
         </label>
         <h3>Add a message</h3>
@@ -245,7 +251,6 @@
         <h2>
           Your switch
           {#if phase === 'ACTIVE'}<span class="pill ok">active</span>
-          {:else if phase === 'TRIGGERED'}<span class="pill warn">triggered — grace running</span>
           {:else}<span class="pill danger">published &amp; readable</span>{/if}
         </h2>
 
@@ -254,18 +259,23 @@
             Next deadline: <strong>{fmt(sw.publishAt)}</strong>
             <span class="muted">(in {fmtRemaining(sw.publishAt)})</span>
           </p>
-        {:else if phase === 'TRIGGERED'}
-          <p>
-            The messages have been published, but remain unreadable to anyone until
-            <strong>{fmt(sw.roundTime)}</strong>
-            <span class="muted">({fmtRemaining(sw.roundTime)})</span>.
-            A check-in now revokes them.
+          <label>
+            Check-in interval
+            <select bind:value={reschedPresetIndex}>
+              <option value={0}>7 days — high attention</option>
+              <option value={1}>30 days — standard</option>
+              <option value={2}>90 days — long-term</option>
+            </select>
+          </label>
+          <p class="muted small help">
+            Changing the interval takes effect on your next check-in — it reschedules the
+            deadline from that moment.
           </p>
         {:else}
           <p>
-            The round has been reached — recipients have been able to read since
-            <strong>{fmt(sw.roundTime)}</strong>. A check-in restarts the switch with
-            fresh capsules.
+            The deadline passed — the message was published and has been readable by its
+            recipient since <strong>{fmt(sw.publishAt)}</strong>. It cannot be recalled. A
+            check-in starts the switch over with a fresh capsule.
           </p>
         {/if}
 
@@ -274,12 +284,11 @@
             on:click={doCheckin}
             disabled={!!busy || (editingMessageId !== null && !editedMessage.trim())}
           >
-            {phase === 'ACTIVE' ? 'Check-in' : 'Check-in & revoke'}
+            {phase === 'ACTIVE' ? 'Check-in' : 'Check-in (restart)'}
           </button>
         </div>
         <p class="muted small">
-          Check-in anchor: {fmt(sw.lastCheckinAt)} · Interval {sw.interval / 86400} d · Grace
-          {sw.grace / 86400} d
+          Check-in anchor: {fmt(sw.lastCheckinAt)} · Interval {sw.interval / 86400} d
         </p>
       </div>
 
@@ -309,8 +318,9 @@
 
             {#if msg.concealmentBroken}
               <div class="banner warn">
-                After a false trigger, concealment toward this recipient is permanently
-                broken. Options: change recipient, talk it over, or leave it as is.
+                The deadline passed once, so this message was published and read: concealment
+                toward this recipient is permanently broken. Options: change recipient, talk
+                it over, or leave it as is.
               </div>
             {/if}
 

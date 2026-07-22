@@ -219,7 +219,6 @@ describe('renewCapsule', () => {
       message: 'my message',
       recipient: recipientPub,
       interval: 30 * 86400,
-      grace: 5 * 86400,
       updated_at: now,
     })
 

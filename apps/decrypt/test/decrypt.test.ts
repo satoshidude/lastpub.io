@@ -63,7 +63,7 @@ describe('Decrypt page: logic (§5)', () => {
     // before revocation: not revoked
     expect(await checkRevoked(pool, [relay.url], fetched!)).toBe(false)
 
-    // revocation: NIP-09 from the ephemeral key (§4.4) → status flips
+    // NIP-09 delete from the ephemeral key → deletion status flips
     const revocation = buildWrapRevocation(wrapEphemeralKey, wrap.id)
     expect(revocation.pubkey).toBe(wrap.pubkey) // only this way do relays honor the delete
     await Promise.allSettled(pool.publish([relay.url], revocation))

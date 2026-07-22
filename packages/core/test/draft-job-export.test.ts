@@ -19,7 +19,6 @@ describe('Draft (Self-Gift-Wrap, §1.5)', () => {
       message: 'hello',
       recipient: '0'.repeat(64),
       interval: 7 * 86400,
-      grace: 3 * 86400,
       updated_at: now,
     }
     const wrap = await createDraftWrap(author.signer, draft)
@@ -34,7 +33,6 @@ describe('Draft (Self-Gift-Wrap, §1.5)', () => {
       message: 'private',
       recipient: '0'.repeat(64),
       interval: 1000,
-      grace: 100,
       updated_at: now,
     })
     await expect(readDraftWrap(newSigner().signer, wrap)).rejects.toThrow()

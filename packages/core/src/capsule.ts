@@ -70,7 +70,7 @@ export async function renewCapsule(
   publishAt: number
 }> {
   const draft = await readDraftWrap(signer, args.draftWrap)
-  const schedule = computeSchedule(args.lastCheckinAt, draft.interval, draft.grace)
+  const schedule = computeSchedule(args.lastCheckinAt, draft.interval)
   const { wrap, rumorId, wrapEphemeralKey } = await createCapsule(signer, {
     plaintext: draft.message,
     recipient: draft.recipient,
@@ -127,9 +127,10 @@ export async function unwrapCapsule(
 }
 
 /**
- * Revocation (spec §4.4): NIP-09 delete request on the published 1059,
- * signed with the locally retained ephemeral key of the wrap — only it can
- * delete the 1059, without exposing the author link.
+ * NIP-09 delete request on a published 1059, signed with the locally retained
+ * ephemeral key of the wrap — only it can delete the 1059, without exposing the
+ * author link. Best-effort relay cleanup; it cannot make a readable capsule
+ * unreadable, and the decrypt page surfaces it as a display-only status (§5.3).
  */
 export function buildWrapRevocation(
   wrapEphemeralKey: string,

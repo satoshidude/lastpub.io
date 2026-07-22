@@ -50,10 +50,8 @@ function migrateSwitch(raw: unknown): SwitchData | null {
     switchId: r.switchId as string,
     towerPub: (r.towerPub as string) ?? '',
     interval: r.interval as number,
-    grace: r.grace as number,
     lastCheckinAt: r.lastCheckinAt as number,
     publishAt: r.publishAt as number,
-    roundTime: r.roundTime as number,
     messages: [
       {
         id: crypto.randomUUID(),

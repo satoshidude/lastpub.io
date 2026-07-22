@@ -32,24 +32,23 @@ describe('roundForTime / timeForRound', () => {
 describe('computeSchedule', () => {
   const anchor = 1_800_000_000
 
-  it('invariant: roundTime − publishAt = grace', () => {
-    const { interval, grace } = DEFAULT_PRESET
-    const s = computeSchedule(anchor, interval, grace)
+  it('trigger is the deadline (no grace)', () => {
+    const { interval } = DEFAULT_PRESET
+    const s = computeSchedule(anchor, interval)
     expect(s.deadline).toBe(anchor + interval)
     expect(s.publishAt).toBe(s.deadline)
-    expect(s.roundTime - s.publishAt).toBe(grace)
   })
 
-  it('the beacon for the computed round never appears before roundTime', () => {
+  it('the beacon for the computed round never appears before publish_at', () => {
     for (const off of [0, 1, 2, 3, 59, 3600]) {
-      const s = computeSchedule(anchor + off, 7 * 86400, 3 * 86400)
-      expect(timeForRound(s.round)).toBeGreaterThanOrEqual(s.roundTime)
-      expect(timeForRound(s.round) - s.roundTime).toBeLessThan(QUICKNET.period)
+      const s = computeSchedule(anchor + off, 7 * 86400)
+      expect(timeForRound(s.round)).toBeGreaterThanOrEqual(s.publishAt)
+      expect(timeForRound(s.round) - s.publishAt).toBeLessThan(QUICKNET.period)
     }
   })
 
-  it('throws on non-positive parameters', () => {
-    expect(() => computeSchedule(anchor, 0, 3)).toThrow()
-    expect(() => computeSchedule(anchor, 7, -1)).toThrow()
+  it('throws on a non-positive interval', () => {
+    expect(() => computeSchedule(anchor, 0)).toThrow()
+    expect(() => computeSchedule(anchor, -1)).toThrow()
   })
 })

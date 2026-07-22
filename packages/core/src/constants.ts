@@ -37,8 +37,8 @@ export const CHECKIN_TOLERANCE_SEC = 600
 export const TIMESTAMP_RANDOMIZATION_SEC = 2 * 24 * 3600
 
 export const PRESETS = [
-  { interval: 7 * 86400, grace: 3 * 86400 },
-  { interval: 30 * 86400, grace: 5 * 86400 },
-  { interval: 90 * 86400, grace: 7 * 86400 },
+  { interval: 7 * 86400 },
+  { interval: 30 * 86400 },
+  { interval: 90 * 86400 },
 ] as const
 export const DEFAULT_PRESET = PRESETS[1]

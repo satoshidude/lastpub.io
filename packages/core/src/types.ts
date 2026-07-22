@@ -13,7 +13,6 @@ export type LastpubDraft = {
   message: string
   recipient: string
   interval: number
-  grace: number
   updated_at: number
 }
 
@@ -31,7 +30,6 @@ export type LastpubExportV1 = {
 export type Schedule = {
   deadline: number
   publishAt: number
-  roundTime: number
   round: number
 }
 

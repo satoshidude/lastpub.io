@@ -5,7 +5,6 @@ import {
   buildCancel,
   buildExport,
   buildJobRequest,
-  buildWrapRevocation,
   computeSchedule,
   createCapsule,
   createCheckin,
@@ -171,7 +170,6 @@ export class LastpubClient {
     message: string
     recipientNpub: string
     interval: number
-    grace: number
   }): Promise<SwitchData> {
     const decoded = nip19.decode(args.recipientNpub)
     if (decoded.type !== 'npub') throw new Error('Invalid recipient npub')
@@ -180,14 +178,13 @@ export class LastpubClient {
     const now = Math.floor(Date.now() / 1000)
     const switchId = crypto.randomUUID()
     const messageId = crypto.randomUUID()
-    const schedule = computeSchedule(now, args.interval, args.grace)
+    const schedule = computeSchedule(now, args.interval)
 
     const draftWrap = await createDraftWrap(this.signer, {
       switch_id: switchId,
       message: args.message,
       recipient,
       interval: args.interval,
-      grace: args.grace,
       updated_at: now,
     })
     await this.publish(draftWrap).catch(() => {}) // relays are a secondary copy, best effort
@@ -209,10 +206,8 @@ export class LastpubClient {
       switchId,
       towerPub: tower,
       interval: args.interval,
-      grace: args.grace,
       lastCheckinAt: now,
       publishAt: schedule.publishAt,
-      roundTime: schedule.roundTime,
       messages: [
         {
           id: messageId,
@@ -232,14 +227,18 @@ export class LastpubClient {
   /**
    * Check-in flow, 5 stages (§4.3): one 1042, then ALL messages are renewed
    * (new round, new capsule, new job). `edited` replaces the text of exactly
-   * one message beforehand. Within the grace window, this is the revocation
-   * (§4.4).
+   * one message beforehand; `timing` changes the interval from now on.
    */
   async checkin(
     current: SwitchData,
     edited?: { messageId: string; message: string },
+    timing?: { interval: number },
   ): Promise<SwitchData> {
     this.assertSingleMessage(current)
+
+    // A check-in may also change the timer: the new interval takes effect from
+    // this check-in (a reschedule), so the whole switch is rebuilt against it.
+    const interval = timing?.interval ?? current.interval
 
     // Stage 1: sign 1042 and deliver it as a gift wrap to the tower npub
     const tower = this.towerFor(current)
@@ -252,20 +251,24 @@ export class LastpubClient {
     await this.publish(wrappedCheckin)
 
     // Stage 3: new shared trigger for all messages
-    const schedule = computeSchedule(checkinEvent.created_at, current.interval, current.grace)
+    const schedule = computeSchedule(checkinEvent.created_at, interval)
 
     // Stages 2 + 4 per message: read draft (edit if needed), rebuild capsule
     const items: PendingItem[] = []
     for (const msg of current.messages) {
       let draftWrap = msg.draftWrap
       let draft = await readDraftWrap(this.signer, draftWrap)
-      if (edited && edited.messageId === msg.id && edited.message !== draft.message) {
+      const intervalChanged = interval !== current.interval
+      if (
+        (edited && edited.messageId === msg.id && edited.message !== draft.message) ||
+        intervalChanged
+      ) {
         draftWrap = await createDraftWrap(this.signer, {
           switch_id: current.switchId,
-          message: edited.message,
+          message:
+            edited && edited.messageId === msg.id ? edited.message : draft.message,
           recipient: msg.recipient,
-          interval: current.interval,
-          grace: current.grace,
+          interval,
           updated_at: checkinEvent.created_at,
         })
         await this.publish(draftWrap).catch(() => {})
@@ -288,11 +291,11 @@ export class LastpubClient {
     const pending: PendingStage5 = {
       checkinAt: checkinEvent.created_at,
       publishAt: schedule.publishAt,
-      roundTime: schedule.roundTime,
+      interval,
       items,
     }
     this.storage.savePending(pending)
-    return this.completeStage5(current, pending)
+    return this.completeStage5({ ...current, interval }, pending)
   }
 
   /**
@@ -310,16 +313,10 @@ export class LastpubClient {
       pending.items.map((item) => this.awaitFeedback(tower, item.job.id, 'scheduled')),
     )
 
-    // Revocation (§4.4): delete published (burned) capsules via NIP-09 —
-    // signed with the retained ephemeral key, best effort
-    const wasTriggered = Math.floor(Date.now() / 1000) > current.publishAt
-    if (wasTriggered) {
-      for (const msg of current.messages) {
-        if (!msg.wrapEphemeralKey) continue
-        const revocation = buildWrapRevocation(msg.wrapEphemeralKey, msg.wrap.id)
-        await this.publish(revocation).catch(() => {})
-      }
-    }
+    // If the deadline had already passed, the old capsule was published and is
+    // readable — there is no revocation, only the honest record that
+    // concealment toward that recipient is now broken.
+    const wasPublished = Math.floor(Date.now() / 1000) > current.publishAt
 
     const messages: MessageData[] = current.messages.map((msg) => {
       const item = pending.items.find((i) => i.messageId === msg.id)
@@ -330,14 +327,14 @@ export class LastpubClient {
         wrap: item.wrap,
         wrapEphemeralKey: item.wrapEphemeralKey,
         draftWrap: item.draftWrap,
-        concealmentBroken: msg.concealmentBroken || wasTriggered,
+        concealmentBroken: msg.concealmentBroken || wasPublished,
       }
     })
     const data: SwitchData = {
       ...current,
+      interval: pending.interval,
       lastCheckinAt: pending.checkinAt,
       publishAt: pending.publishAt,
-      roundTime: pending.roundTime,
       messages,
     }
     this.storage.saveSwitch(data)

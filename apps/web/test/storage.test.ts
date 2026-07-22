@@ -31,10 +31,8 @@ describe('web storage adapter', () => {
       switchId: 's1',
       towerPub: 'abc',
       interval: 100,
-      grace: 10,
       lastCheckinAt: 1,
       publishAt: 101,
-      roundTime: 111,
       messages: [],
     }
     storage.saveSwitch(sw as never)
@@ -44,7 +42,8 @@ describe('web storage adapter', () => {
   })
 
   it('migrates a legacy flat switch (one message inline) to messages[]', () => {
-    // The pre-messages[] shape: recipient/wrap/etc. sat directly on the switch.
+    // The pre-messages[] shape: recipient/wrap/etc. sat directly on the switch,
+    // and it still carried the now-removed grace/roundTime fields.
     const legacy = {
       switchId: 's2',
       towerPub: 'tower',
@@ -67,6 +66,9 @@ describe('web storage adapter', () => {
     expect(migrated?.messages[0].requestId).toBe('req9')
     expect(migrated?.messages[0].concealmentBroken).toBe(false)
     expect(migrated?.messages[0].id).toBeTruthy() // a fresh id was minted
+    // grace/roundTime are dropped by the migration
+    expect((migrated as Record<string, unknown>)?.grace).toBeUndefined()
+    expect((migrated as Record<string, unknown>)?.roundTime).toBeUndefined()
   })
 
   it('discards a legacy pending journal without items', () => {

@@ -12,10 +12,10 @@ export type MessageData = {
   recipient: string // hex
   requestId: string
   wrap: Event
-  /** Ephemeral secret of the current wrap — the only key for the NIP-09 revocation (§4.4). */
+  /** Ephemeral secret of the current wrap (retained; wraps sign with a throwaway key). */
   wrapEphemeralKey: string
   draftWrap: Event
-  /** Permanent after a false trigger: concealment toward this recipient broken (§4.4). */
+  /** Once the deadline passes, the message is public and readable: concealment broken. */
   concealmentBroken: boolean
 }
 
@@ -25,10 +25,8 @@ export type SwitchData = {
   /** Tower pubkey (hex), fixed at creation — independent of later settings changes. */
   towerPub: string
   interval: number
-  grace: number
   lastCheckinAt: number
   publishAt: number
-  roundTime: number
   messages: MessageData[]
 }
 
@@ -50,7 +48,8 @@ export type PendingItem = {
 export type PendingStage5 = {
   checkinAt: number
   publishAt: number
-  roundTime: number
+  /** Effective interval for this renewal, so a retry restores it consistently. */
+  interval: number
   items: PendingItem[]
 }
 

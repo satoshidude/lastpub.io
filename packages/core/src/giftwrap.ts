@@ -25,7 +25,7 @@ export function buildRumor(
  * NIP-59 pipeline (spec §1.2): rumor → seal (kind 13, author-signed,
  * tags=[]) → gift wrap (kind 1059, ephemeral key, p tag).
  * Also returns the ephemeral secret: only it can later delete the published
- * 1059 via NIP-09 (revocation, §4.4), without exposing the author link.
+ * 1059 via NIP-09 (best-effort relay cleanup), without exposing the author link.
  */
 export async function wrapRumorDetailed(
   signer: Signer,

@@ -42,7 +42,6 @@ export async function readDraftWrap(signer: Signer, wrap: Event): Promise<Lastpu
     typeof draft.message !== 'string' ||
     typeof draft.recipient !== 'string' ||
     typeof draft.interval !== 'number' ||
-    typeof draft.grace !== 'number' ||
     typeof draft.updated_at !== 'number'
   ) {
     throw new LastpubError('ERR_DRAFT_INVALID', 'not a lastpub-draft payload')

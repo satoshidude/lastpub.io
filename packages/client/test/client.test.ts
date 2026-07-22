@@ -73,10 +73,8 @@ describe('LastpubClient E2E (Mini-Relay + Tower)', () => {
       message: 'first draft',
       recipientNpub: nip19.npubEncode(getPublicKey(recipientSk)),
       interval: 30 * 86400,
-      grace: 5 * 86400,
     })
     expect(sw.publishAt - sw.lastCheckinAt).toBe(30 * 86400)
-    expect(sw.roundTime - sw.publishAt).toBe(5 * 86400)
     expect(sw.messages).toHaveLength(1)
     const firstMsg = sw.messages[0]
     expect(running.db.getJobByRequestId(firstMsg.requestId)?.status).toBe('scheduled')

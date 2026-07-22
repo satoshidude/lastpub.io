@@ -62,8 +62,9 @@ export async function fetchWrap(
 }
 
 /**
- * Revocation status (§5.3): does a NIP-09 delete from the wrap signer
- * (ephemeral key) exist? Display only, does not suppress decryption.
+ * Deletion status (§5.3): does a NIP-09 delete from the wrap signer (ephemeral
+ * key) exist? Display only, does not suppress decryption — a published capsule
+ * stays readable regardless.
  */
 export async function checkRevoked(
   pool: SimplePool,

@@ -4,11 +4,13 @@ trustless · nostr-native · self-sovereign
 
 A dead man's switch on nostr. Stay silent longer than the interval you set, and your
 message gets published — encrypted, readable only by its recipient. Until then you alone
-can read, edit, or revoke it.
+can read, edit, or delete it. You can stop it any time before the deadline; after the
+deadline it is final.
 
 **Four guarantees**
 
-1. **Read:** only the author, and the recipient once the drand round is reached.
+1. **Read:** only the author, and the recipient once the drand round is reached — which
+   is exactly when the switch triggers.
 2. **Forge:** nobody — the capsule is pre-signed and sealed.
 3. **Open early:** nobody — time-lock encryption against drand quicknet.
 4. **Conceal:** the recipient stays hidden until the switch triggers.
@@ -18,15 +20,17 @@ can read, edit, or revoke it.
 You seal a message into a capsule that cannot be opened before a chosen drand round, and
 hand it to a scheduler ("tower") that withholds it until your deadline passes. Every
 check-in renews the deadline and re-seals the message against a later round. Miss the
-deadline and the tower broadcasts the capsule — still unreadable, because its round has
-not arrived yet. That gap between trigger and round is your window to revoke.
+deadline and the tower broadcasts the capsule — and it is readable at that same moment,
+because the round is chosen to be the one reached at the deadline. There is no gap
+between publication and readability, so there is no window to stop it after the fact:
+you can stop a switch any time before the deadline, by deleting it; once the deadline
+passes, the message is out and cannot be recalled.
 
 Plaintext never leaves the browser, and the tower never learns who the recipient is. It
 holds no keys: it is a messenger and an alarm clock.
 
-Two parameters control everything. **Interval** is how often you must check in;
-**grace** is the revocation window after a trigger. Presets are 7 days / 3 days,
-30 days / 5 days, and 90 days / 7 days.
+One parameter controls everything: **interval**, how often you must check in. Presets
+are 7 days, 30 days (default), and 90 days.
 
 ## Install
 
@@ -73,9 +77,9 @@ LASTPUB_INTEGRATION=1 npm test -w @lastpub/core
 | Path | Contents |
 |---|---|
 | `packages/core` | protocol and crypto library (create → renew → verify → unwrap → decrypt) |
-| `packages/client` | client flows (create, check-in, revoke, export) — framework-agnostic, pluggable storage |
+| `packages/client` | client flows (create, check-in, delete, export) — framework-agnostic, pluggable storage |
 | `packages/tower` | reference scheduler (5905 jobs, withholding store, 1042 check-ins, trigger broadcast) |
-| `apps/web` | minimal UI (create, check-in, revoke, export) |
+| `apps/web` | minimal UI (create, check-in, delete, export) |
 | `apps/decrypt` | standalone decrypt page (nevent + export file, static) |
 | `docs/` | the protocol specification |
 
@@ -83,9 +87,10 @@ LASTPUB_INTEGRATION=1 npm test -w @lastpub/core
 
 One switch and one message per npub. Recipients need an npub and a nip44-capable NIP-07
 extension. There is no reminder service — nothing warns you before a deadline, so keep
-short check-in rhythms or build your own reminders. After a false trigger, concealment
-toward that recipient is permanently broken; the app says so rather than pretending
-otherwise.
+short check-in rhythms or build your own reminders. The only protection against a
+missed check-in is checking in on time; once the deadline passes, concealment toward
+that recipient is permanently and immediately broken, whether the trigger was intended
+or not — the app says so rather than pretending otherwise.
 
 ## Standards
 

@@ -304,7 +304,7 @@ describe('Tower', () => {
     })
   })
 
-  describe('Revocation scenario (§4.4, tower view)', () => {
+  describe('Restart after publication (tower view)', () => {
     it('after trigger: check-in is still accepted, new job starts normally', async () => {
       const { job } = await submitJob(3600)
       await tower.handleEvent(job)
@@ -312,7 +312,7 @@ describe('Tower', () => {
       await tower.tick()
       expect(db.getJobByRequestId(job.id)?.status).toBe('published')
 
-      // Grace window: 1042 + new job (full 5-stage flow)
+      // Restart: 1042 + new job (full 5-stage flow)
       const checkin = await createCheckin(author, { now })
       const wrapped = await wrapRumor(author, checkin as unknown as Rumor, towerPub)
       await tower.handleEvent(wrapped)
@@ -322,7 +322,7 @@ describe('Tower', () => {
       const [fb] = await tower.handleEvent(fresh.job)
       expect(await decryptFeedback(fb)).toEqual([['status', 'success', 'scheduled']])
       expect(db.getJobByRequestId(fresh.job.id)?.status).toBe('scheduled')
-      // published (burned) job remains as history
+      // the old published job remains as history
       expect(db.getJobByRequestId(job.id)?.status).toBe('published')
     })
   })

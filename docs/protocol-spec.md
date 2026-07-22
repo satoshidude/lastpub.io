@@ -35,27 +35,27 @@ SCHEME     = bls-unchained-g1-rfc9380
 
 ### 1.1 Time model — formulas
 
-Two parameters per switch: `interval` and `grace` (seconds, internal; UI shows days).
+One parameter per switch: `interval` (seconds, internal; UI shows days).
 
 ```
 deadline   = last_checkin_at + interval
-publish_at = deadline                          // trigger, no grace period
-round_time = deadline + grace
-round      = max(1, ceil((round_time − GENESIS) / PERIOD) + 1)
+publish_at = deadline                          // trigger
+round      = roundForTime(publish_at)          // smallest round whose beacon appears at or after publish_at
+           // = max(1, ceil((publish_at − GENESIS) / PERIOD) + 1)
 ```
 
-The beacon of round r appears at `GENESIS + (r − 1) · PERIOD` — round 1 lies **on** the genesis (drand reference, `drand-client` `roundTime`). `round` is thus the smallest round whose beacon does not appear before `round_time`.
+The beacon of round r appears at `GENESIS + (r − 1) · PERIOD` — round 1 lies **on** the genesis (drand reference, `drand-client` `roundTime`). `round` is thus the smallest round whose beacon does not appear before `publish_at`.
 
-**Invariant:** `round_time − publish_at = grace`. The client computes both values itself; the scheduler needs no knowledge of the time model.
+Broadcast and readability coincide: at `publish_at` the tower broadcasts the capsule, and its round has by then been reached — there is no window between "published" and "readable". The client computes `round` itself; the scheduler needs no knowledge of the time model.
 
-**Presets:** 7 d / 3 d · **30 d / 5 d (default)** · 90 d / 7 d.
+**Presets:** 7 d · **30 d (default)** · 90 d.
 
 **Edge cases:**
 
 - **Client clock skew:** the client takes `last_checkin_at` from the `created_at` of the 1042 confirmed by the tower (not from the local clock). This way client and tower compute against the same anchor.
-- **Round already past** (`round_time ≤ now` at capsule build time): hard client error `ERR_ROUND_IN_PAST` — capsule is not built. Cannot occur under normal operation (`round_time = deadline + grace > now`), but catches clock defects.
+- **Round already past** (`publish_at ≤ now` at capsule build time): hard client error `ERR_ROUND_IN_PAST` — capsule is not built. Cannot occur under normal operation (`publish_at = deadline > now`), but catches clock defects.
 - **drand outage:** affects only decryption (delays it); trigger/publish are unaffected. The decrypt page shows the state "beacon unavailable, try again later" when drand endpoints are unreachable (§5.4).
-- **Scheduler delay:** permitted non-normatively; any delay shortens the real revocation window. The reference scheduler targets broadcast ≤ 60 s after `publish_at` (§3.5).
+- **Scheduler delay:** permitted non-normatively; a delayed broadcast simply delays publication — there is no revocation window to shorten, since publication and readability are the same moment. The reference scheduler targets broadcast ≤ 60 s after `publish_at` (§3.5).
 
 ### 1.2 Capsule structure (per Shugur draft, pinned version)
 
@@ -125,7 +125,7 @@ Normative are exclusively `kind`, `pubkey`, `created_at`, `sig`. Full spec text 
 
 - Signature via NIP-07; the tower verifies signature + switch ownership (author pubkey = job submitter).
 - Towers (including pure observers) reset their timer **exclusively** on a valid 1042.
-- The 1042 is at the same time the revocation instrument in the grace window (§4.4).
+- A 1042 only has effect before the deadline: it is the sole mechanism for renewing the switch (§4.3). A check-in after the deadline has already passed is moot — the capsule is published by then.
 - **Delivery path:** NIP-59 gift wrap to the tower npub, `["p", <tower>]` tag on the wrap. No public relay.
 
 **Registry:** Kind 1042 is free. Reservation happens exclusively via a complete spec PR against `nostr-protocol/nips` (kind table in README.md + spec text). Own task, to be submitted before launch (§6).
@@ -175,7 +175,6 @@ Basis: `kinds/5905.md` ("Nostr Event Publish Schedule", pinned) + NIP-90 framewo
   "message": "<plaintext>",
   "recipient": "<npub/hex>",
   "interval": <sec>,
-  "grace": <sec>,
   "updated_at": <unix>
 }
 ```
@@ -203,8 +202,8 @@ interface Signer {
 }
 
 // Time model (pure functions, no IO)
-computeSchedule(lastCheckinAt: number, interval: number, grace: number):
-  { deadline: number; publishAt: number; roundTime: number; round: number }
+computeSchedule(lastCheckinAt: number, interval: number):
+  { deadline: number; publishAt: number; round: number }
 
 // Build capsule: plaintext → tlock → rumor → seal → wrap
 createCapsule(signer: Signer, args: {
@@ -214,7 +213,7 @@ createCapsule(signer: Signer, args: {
 // Check-in artifacts
 createCheckin(signer: Signer, args?: { switchId?: string }): Promise<VerifiedEvent>   // 1042
 renewCapsule(signer: Signer, args: {                                                  // stages 2–4
-  draftWrap: Event; interval: number; grace: number; lastCheckinAt: number
+  draftWrap: Event; interval: number; lastCheckinAt: number
 }): Promise<{ wrap: VerifiedEvent; round: number; publishAt: number }>
 
 // Scheduler side (tower uses the same lib)
@@ -255,7 +254,7 @@ Note: the re-encryption (new round) mandatorily requires seal-encrypt+sign; the 
 ### 2.3 Test plan
 
 - **Round trip:** create → unwrap → (time travel: fixed historical round) decrypt == plaintext.
-- **Renew:** `renewCapsule` twice → new round, new wrap, same plaintext; old wrap still decrypts (burned ≠ unusable — the basis of the revocation model).
+- **Renew:** `renewCapsule` twice → new round, new wrap, same plaintext; old wrap still decrypts (renewal does not invalidate a previously sealed capsule — it is simply superseded by the new job at the tower).
 - **Negative vectors** per error code (armored age, second stanza, tag mismatch, p tag in rumor, seal with tags, tampered rumor id, 64 KiB+1).
 - **Replay suite** for `verifyCheckin`: older created_at, same created_at, ±10-minute boundaries, event ID dedup.
 - **Interop:** open a public capsule (1041) generated with capsules.shugur.com using `decryptCapsule`; validate a lastpub capsule there (manual gate test before launch).
@@ -316,7 +315,7 @@ CREATE TABLE seen_events (             -- replay/dedup window
 
 1. Unwrap gift wrap to the tower npub → inner 1042.
 2. `verifyCheckin` (signature, monotonicity against `checkins.last_created_at`, ±10 min against server time, `seen_events`).
-3. Switch ownership: a job exists with `author == pubkey` (status `scheduled` **or** `published` with `now < publish_at_round_time` — grace window, revocation §4.4). Otherwise ignore.
+3. Switch ownership: a job exists with `author == pubkey` and status `scheduled`. Otherwise ignore — once a job is `published` there is nothing left to renew: the capsule has already been broadcast and its round reached (§4.4).
 4. Valid → update `checkins.last_created_at`. **No timer reset in the job:** the timer reset materializes only through the new 5905 job (stage 5). The tower itself never extends unilaterally — otherwise an old capsule with an expired round would live on.
 
 ### 3.4 Trigger flow
@@ -346,15 +345,13 @@ App is client-side; SSR is used only for landing/legal text. Plaintext never lea
 ### 4.1 Switch state machine (client view)
 
 ```
-(no switch) ──create──▶ ACTIVE ──deadline reached──▶ TRIGGERED (grace running)
+(no switch) ──create──▶ ACTIVE ──deadline reached──▶ PUBLISHED (recipient can read)
    ACTIVE ──checkin ok──▶ ACTIVE (new anchor)
    ACTIVE ──delete──▶ (no switch, silent)
    ACTIVE ──checkin partial──▶ WARN (retry loop) ──all confirmed──▶ ACTIVE
-   TRIGGERED ──1042 in grace window──▶ REVOKED_REBUILT (full 5-stage flow) ──▶ ACTIVE*
-   TRIGGERED ──grace expired──▶ RELEASED (recipient can read)
 ```
 
-\* with a permanent notice "concealment toward this recipient broken".
+PUBLISHED is terminal — there is no path back to ACTIVE. Broadcast and readability coincide (§1.1), so the moment the deadline is reached the capsule is both published and readable; there is nothing left to act on. The UI shows a permanent notice "concealment toward this recipient broken".
 
 ### 4.2 Create flow
 
@@ -375,12 +372,13 @@ App is client-side; SSR is used only for landing/legal text. Plaintext never lea
 **Success rule (applies from the first tower onward):** the check-in counts as successful only once stage 5 is confirmed via 7000 by **all** towers. The client persists the flow state (localStorage) as a journal `{checkin_event, per_tower: {sent, confirmed}}`:
 
 - Partial success / abort → state WARN, banner "check-in incomplete", automatic retry (backoff 30 s / 2 min / 10 min, then manual) — retry repeats **only** stage 5 with the already-built capsule (the journal holds the finished wrap; no new NIP-07 cycle needed).
-- Rationale: a timer reset without payload renewal would publish an expired round at trigger — a zero revocation window. That is why the tower does not confirm 1042 as a reset (§3.3); only the new job counts.
+- Rationale: a timer reset without payload renewal would publish a capsule sealed to an already-past round at trigger, since `publish_at` and `round` now coincide (§1.1) — the capsule must be rebuilt against the new deadline. That is why the tower does not confirm 1042 as a reset (§3.3); only the new job counts.
 
-### 4.4 Delete / revocation
+### 4.4 Delete
 
-- **Delete (before trigger):** `buildCancel` to all towers + server deletion + NIP-09 on draft wraps (best effort). Silent.
-- **Revocation (grace window):** the UI action "revoke" = a normal check-in (full 5-stage flow). In addition: a NIP-09 delete request on the published 1059, **signed with the locally retained ephemeral key of the wrap** — only this key can delete the 1059 via NIP-09; an author-signed delete would publicly expose the author↔wrap link. The client therefore retains the ephemeral secret of the current wrap (`createCapsule` returns it). Status "revoked" is sent to the server (decrypt page status, §5.3); the reference tower sends no notification of the revocation to the recipient. The client UI permanently shows "concealment toward this recipient broken" with three options (change recipient / conversation / leave as is). Honestly communicate best effort: the recipient's local copy may still wait out the round.
+**Delete (before the trigger)** is the only way to stop a switch: `buildCancel` to all towers + server deletion + NIP-09 on draft wraps (best effort). Silent — the recipient never learns the switch existed.
+
+After the trigger there is nothing to delete: the tower has broadcast the 1059 and, by construction, its round has been reached (§1.1) — the recipient can already read it. It cannot be recalled. The client marks the switch PUBLISHED (§4.1) and shows a permanent notice "concealment toward this recipient broken".
 
 ### 4.5 Ciphertext export (`lastpub-export.json`)
 
@@ -420,7 +418,7 @@ NIP-19 `nevent` of the **published gift wrap (1059)**: event ID + 2–4 relay hi
 2. NIP-07 of the **recipient**: `unwrapCapsule` (2× nip44Decrypt). No extension → clear help page (extension recommendations).
 3. Round status via drand HTTP (at least 2 endpoints: `api.drand.sh`, `drand.cloudflare.com`): current round < capsule round → countdown "readable from <date/time>" (computed back from the round), no decrypt attempt.
 4. Round reached → `decryptCapsule` (tlock-js verifies the beacon BLS-side against the chain key — Shugur MUST "do not trust the local clock" is thereby satisfied) → plaintext display, DOM only, no storage.
-5. Revocation status: the page checks best effort whether a NIP-09 delete by the wrap author (ephemeral key) or a lastpub status event exists → banner "the author has revoked this message" (display only, does not suppress the decrypt — an honest best-effort signal only).
+5. Deletion display (best effort, informational only): the page checks whether a NIP-09 delete event for the 1059 exists on the hint relays → banner "the author has deleted this capsule from relays." Display only, does not affect decryption: an author may delete a published capsule from relays, but the page still decrypts it if it has already fetched it (or holds it via the export file, §4.5).
 
 ### 5.4 Later-click
 
@@ -448,7 +446,7 @@ The page guarantees nothing about relay retention: as long as the 1059 remains o
 1. **Repo setup** (`lastpub` monorepo: `packages/core`, `packages/tower`, `apps/web`, `apps/decrypt`, `docs/protocol.md` = §1 of this document; AGPL-3.0).
 2. **`@lastpub/core`** per §2 including test plan §2.3 — first working unit, purely test-driven.
 3. **Reference tower** per §3 (job acceptance → 1042 → trigger → cancellation, in this order), integration test client↔tower over a local relay (e.g. strfry or nostr-rs-relay in Docker).
-4. **Web app** per §4 (create → check-in → delete/revocation), then **decrypt page** per §5.
+4. **Web app** per §4 (create → check-in → delete), then **decrypt page** per §5.
 5. **External tasks in parallel:** 1042 NIPs PR (§6), Shugur diff check + interop gate (§6), operate the deployment's own relay.
 
 ---

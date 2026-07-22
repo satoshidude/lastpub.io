@@ -16,20 +16,20 @@ export function timeForRound(round: number, chain: ChainParams = QUICKNET): numb
 }
 
 /**
- * Time model (spec §1.1): two parameters, everything else derived.
- * Invariant: roundTime − publishAt = grace.
+ * Time model (spec §1.1): one parameter, everything else derived. The trigger
+ * is the deadline, and the capsule's round is the first beacon at or after it —
+ * so the message becomes readable the moment it is published. There is no
+ * window between publication and readability.
  */
 export function computeSchedule(
   lastCheckinAt: number,
   interval: number,
-  grace: number,
   chain: ChainParams = QUICKNET,
 ): Schedule {
-  if (interval <= 0 || grace <= 0) {
-    throw new Error('interval and grace must be positive seconds')
+  if (interval <= 0) {
+    throw new Error('interval must be positive seconds')
   }
   const deadline = lastCheckinAt + interval
   const publishAt = deadline
-  const roundTime = deadline + grace
-  return { deadline, publishAt, roundTime, round: roundForTime(roundTime, chain) }
+  return { deadline, publishAt, round: roundForTime(publishAt, chain) }
 }
