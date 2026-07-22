@@ -210,4 +210,51 @@ describe('LastpubClient E2E (Mini-Relay + Tower)', () => {
     c.close()
     await tower2.stop()
   }, 30_000)
+
+  it('migration: a check-in moves the switch to the towers in settings', async () => {
+    const towerB = await startTower({
+      signer: new LocalSigner(generateSecretKey()),
+      relays: [relay.url],
+      fallbackRelays: [relay.url],
+      tickMs: 100,
+    })
+    const a = new LocalSigner(generateSecretKey())
+    const rSk = generateSecretKey()
+    const store = new MemoryStore()
+
+    // Create at tower A (the shared `running` tower).
+    const atA = new LastpubClient(
+      a,
+      { relays: [relay.url], towerNpubs: [nip19.npubEncode(running.towerPub)] },
+      store,
+    )
+    const sw = await atA.createSwitch({
+      message: 'portable',
+      recipientNpub: nip19.npubEncode(getPublicKey(rSk)),
+      interval: 30 * 86400,
+    })
+    const oldReq = sw.messages[0].placements[0].requestId
+    expect(running.db.getJobByRequestId(oldReq)?.status).toBe('scheduled')
+    atA.close()
+
+    // Same key + storage, but settings now point at tower B — as after a fresh
+    // install pointed at a live tower. The check-in migrates the switch.
+    const atB = new LastpubClient(
+      a,
+      { relays: [relay.url], towerNpubs: [nip19.npubEncode(towerB.towerPub)] },
+      store,
+    )
+    const after = await atB.checkin(sw)
+    expect(after.towerPubs).toEqual([towerB.towerPub])
+    expect(after.messages[0].placements.map((p) => p.towerPub)).toEqual([towerB.towerPub])
+    expect(towerB.db.getJobByRequestId(after.messages[0].placements[0].requestId)?.status).toBe(
+      'scheduled',
+    )
+    await new Promise((r) => setTimeout(r, 200)) // let tower A process the drop-cancel
+    expect(running.db.getJobByRequestId(oldReq)).toBeUndefined() // dropped tower cancelled
+
+    await atB.deleteSwitch(after)
+    atB.close()
+    await towerB.stop()
+  }, 30_000)
 })

@@ -66,11 +66,6 @@ export class LastpubClient {
     return pubs
   }
 
-  /** Towers of an existing switch: fixed at creation, settings only a fallback. */
-  private towersFor(current?: { towerPubs?: string[] }): string[] {
-    return current?.towerPubs?.length ? current.towerPubs : this.towerPubs
-  }
-
   /**
    * Product policy for the minimal client: one message per switch. The
    * transport supports more — the tower keys jobs by (author, slot) and each
@@ -268,8 +263,13 @@ export class LastpubClient {
     // this check-in (a reschedule), so the whole switch is rebuilt against it.
     const interval = timing?.interval ?? current.interval
 
+    // Renewal targets the towers in the current settings, not the ones fixed at
+    // creation — so a switch recovered on a fresh install (its original host and
+    // tower gone) can be migrated to a live tower simply by pointing settings at
+    // it and checking in. Towers dropped from the set are cancelled below.
+    const towers = this.towerPubs
+
     // Stage 1: sign one 1042 and gift-wrap it to EACH tower
-    const towers = this.towersFor(current)
     const checkinEvent = await createCheckin(this.signer, { switchId: current.switchId })
     for (const tower of towers) {
       const wrappedCheckin = await wrapRumor(this.signer, checkinEvent as unknown as Rumor, tower)
@@ -311,6 +311,15 @@ export class LastpubClient {
         oldPlacements: msg.placements,
       })
       items.push(artifacts)
+
+      // Cancel jobs at towers dropped from the set (best effort): a dropped but
+      // still-live tower would otherwise fire the old capsule at the old deadline.
+      for (const old of msg.placements) {
+        if (!towers.includes(old.towerPub)) {
+          const cancel = await buildCancel(this.signer, old.requestId, old.towerPub)
+          await this.publish(cancel).catch(() => {})
+        }
+      }
     }
 
     // Stage 5: signed events into the journal, then send (success rule §4.3)
@@ -362,7 +371,8 @@ export class LastpubClient {
     })
     const data: SwitchData = {
       ...current,
-      towerPubs: this.towersFor(current),
+      // The switch now lives at exactly the towers it was just scheduled with.
+      towerPubs: [...new Set(pending.items.flatMap((i) => i.placements.map((p) => p.towerPub)))],
       interval: pending.interval,
       lastCheckinAt: pending.checkinAt,
       publishAt: pending.publishAt,

@@ -336,6 +336,11 @@
             {phase === 'ACTIVE' ? 'Check-in' : 'Check-in (restart)'}
           </button>
         </div>
+        <p class="muted small help">
+          A check-in renews the switch at the tower(s) in your Settings — so if a tower (or
+          the host that ran it) goes away, point Settings at a live one and check in to
+          migrate. It stays put as long as Settings are unchanged.
+        </p>
         <p class="muted small">
           Check-in anchor: {fmt(sw.lastCheckinAt)} · Interval {sw.interval / 86400} d
         </p>

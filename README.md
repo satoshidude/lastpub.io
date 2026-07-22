@@ -93,10 +93,13 @@ that recipient is permanently and immediately broken, whether the trigger was in
 or not — the app says so rather than pretending otherwise.
 
 Switch state lives in the browser, but it is not the only copy: your drafts and the
-scheduled job are published to the relays, and the export file is a self-contained
-snapshot. On a new device or after clearing storage, sign in and **restore from relay**,
-or **import an export file**, to rebuild the switch and resume check-ins — against a
-different tower if you like. The standalone decrypt page reads a message from its nevent
+scheduled job (which embeds the capsule) are published to the relays, and the export file
+is a self-contained snapshot. On a new device or after clearing storage, sign in and
+**restore from relay** (just your nsec and the relays) or **import an export file** to
+rebuild the switch and resume check-ins. A check-in renews at the tower(s) in your
+settings, so if the host that ran your tower disappears, point settings at a live tower —
+your own (`npm run dev-stack`) or any other — and check in to migrate; nothing but you
+and the relays is required. The standalone decrypt page reads a message from its nevent
 or export file alone, so a recipient never depends on this app or any single host.
 
 ## Standards
