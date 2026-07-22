@@ -302,17 +302,16 @@
               To <code title={nip19.npubEncode(msg.recipient)}>{npubShort(msg.recipient)}</code>
               <span class="muted small">
                 · Job <code>{msg.requestId.slice(0, 12)}…</code> ·
-                {#if phase === 'ACTIVE'}
-                  <span title="The tower withholds the capsule until the switch triggers, so it is not on any public relay yet. This is the concealment guarantee working.">capsule withheld (not yet public)</span>
-                {:else}
-                  <a
-                    href="https://njump.me/{neventOf(msg.wrap.id, msg.wrap.pubkey)}"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    title="Published at the trigger — now publicly resolvable."
-                    >capsule on njump</a
-                  >
-                {/if}
+                <a
+                  href="https://njump.me/{neventOf(msg.wrap.id, msg.wrap.pubkey)}"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={phase === 'ACTIVE'
+                    ? 'The nevent reference of the capsule. It only resolves after the deadline — the tower withholds the event until then (concealment).'
+                    : 'Published at the trigger — now publicly resolvable.'}
+                  >capsule on njump</a
+                >
+                {#if phase === 'ACTIVE'}<span class="muted"> (withheld until the deadline)</span>{/if}
               </span>
             </p>
 
