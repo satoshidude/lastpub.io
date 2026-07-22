@@ -5,8 +5,9 @@
   import { LastpubClient, FeedbackError } from '@lastpub/client'
   import { storage, type PendingStage5, type Settings, type SwitchData } from '$lib/storage.js'
 
-  let settings: Settings = { relays: [], towerNpub: '' }
+  let settings: Settings = { relays: [], towerNpubs: [] }
   let relaysInput = ''
+  let towersInput = ''
   let signer: Signer | null = null
   let client: LastpubClient | null = null
   let pubkey = ''
@@ -34,6 +35,7 @@
   onMount(() => {
     settings = storage.loadSettings()
     relaysInput = settings.relays.join(', ')
+    towersInput = settings.towerNpubs.join(', ')
     sw = storage.loadSwitch()
     pending = storage.loadPending()
   })
@@ -74,6 +76,7 @@
 
   function saveSettings(): void {
     settings.relays = relaysInput.split(',').map((s) => s.trim()).filter(Boolean)
+    settings.towerNpubs = towersInput.split(',').map((s) => s.trim()).filter(Boolean)
     storage.saveSettings(settings)
     if (signer) client = new LastpubClient(signer, settings, storage)
   }
@@ -195,7 +198,7 @@
 <main>
   <h1>lastpub <span class="tag">publish after silence</span></h1>
 
-  <details class="panel" open={!settings.towerNpub}>
+  <details class="panel" open={!settings.towerNpubs.length}>
     <summary>Settings</summary>
     <label>
       Relays (comma-separated)
@@ -204,19 +207,21 @@
     <p class="muted small help">
       WebSocket URLs of the nostr relays this app publishes to and reads from. Use relays
       that accept writes from anyone — public ones like <code>wss://nos.lol</code> or
-      <code>wss://relay.damus.io</code>, or your own. The tower must be reachable on at
+      <code>wss://relay.damus.io</code>, or your own. Every tower must be reachable on at
       least one of them. This demo is preconfigured with public relays.
     </p>
     <label>
-      Tower npub
-      <input bind:value={settings.towerNpub} placeholder="npub1…" />
+      Tower npubs (comma-separated)
+      <input bind:value={towersInput} placeholder="npub1…, npub1…" />
     </label>
     <p class="muted small help">
-      The public key of the scheduler (“tower”) that holds your sealed message and
-      publishes it if you fall silent. It is a separate service you have to trust — not
-      your own key, and not a relay. Get one from a tower operator, or run your own with
-      <code>npm run dev-stack</code>, which prints its npub. This demo is preconfigured
-      with a public reference tower.
+      Public keys of the schedulers (“towers”) that hold your sealed message and publish it
+      if you fall silent. A tower is a separate service you have to trust — not your own
+      key, and not a relay. <strong>List more than one for redundancy:</strong> the capsule
+      is deposited with each, and if any single tower survives to your deadline, the message
+      still fires. Get one from a tower operator, or run your own with
+      <code>npm run dev-stack</code>, which prints its npub. This demo is preconfigured with
+      one public reference tower.
     </p>
     <button class="secondary" on:click={saveSettings}>Save</button>
   </details>
@@ -345,7 +350,13 @@
             <p>
               To <code title={nip19.npubEncode(msg.recipient)}>{npubShort(msg.recipient)}</code>
               <span class="muted small">
-                · Job <code>{msg.requestId.slice(0, 12)}…</code> ·
+                ·
+                <span
+                  title={msg.placements.map((p) => nip19.npubEncode(p.towerPub)).join('\n')}
+                  >{msg.placements.length === 1
+                    ? '1 tower'
+                    : `${msg.placements.length} towers (redundant)`}</span
+                > ·
                 <a
                   href="https://njump.me/{neventOf(msg.wrap.id, msg.wrap.pubkey)}"
                   target="_blank"

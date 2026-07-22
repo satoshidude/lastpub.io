@@ -112,13 +112,17 @@ describe('Export (§4.5)', () => {
     })
     const exp = buildExport({
       wrap,
-      jobRequestId: 'b'.repeat(64),
-      tower: 'c'.repeat(64),
+      jobs: [
+        { requestId: 'b'.repeat(64), tower: 'c'.repeat(64) },
+        { requestId: 'd'.repeat(64), tower: 'e'.repeat(64) },
+      ],
       publishAt: now + 86400,
       relays: ['wss://r1.example', 'wss://r2.example'],
       now,
     })
     expect(exp.v).toBe(1)
+    expect(exp.jobs).toHaveLength(2)
+    expect(exp.jobs[1].tower).toBe('e'.repeat(64))
     expect(exp.capsule.wrap.id).toBe(wrap.id)
     expect(exp.drand.genesis).toBe(1692803367)
     const decoded = nip19.decode(exp.capsule.nevent)

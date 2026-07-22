@@ -53,7 +53,7 @@ describe('LastpubClient E2E (Mini-Relay + Tower)', () => {
     store = new MemoryStore()
     client = new LastpubClient(
       author,
-      { relays: [relay.url], towerNpub: nip19.npubEncode(running.towerPub) },
+      { relays: [relay.url], towerNpubs: [nip19.npubEncode(running.towerPub)] },
       store,
     )
   })
@@ -77,10 +77,10 @@ describe('LastpubClient E2E (Mini-Relay + Tower)', () => {
     expect(sw.publishAt - sw.lastCheckinAt).toBe(30 * 86400)
     expect(sw.messages).toHaveLength(1)
     const firstMsg = sw.messages[0]
-    expect(running.db.getJobByRequestId(firstMsg.requestId)?.status).toBe('scheduled')
+    expect(running.db.getJobByRequestId(firstMsg.placements[0].requestId)?.status).toBe('scheduled')
     // job is keyed to the message's own slot (§3.2)
-    expect(running.db.getJobByRequestId(firstMsg.requestId)?.slot).toBe(firstMsg.id)
-    expect(store.switch?.messages[0]?.requestId).toBe(firstMsg.requestId)
+    expect(running.db.getJobByRequestId(firstMsg.placements[0].requestId)?.slot).toBe(firstMsg.id)
+    expect(store.switch?.messages[0]?.placements[0]?.requestId).toBe(firstMsg.placements[0].requestId)
 
     // Capsule is a real 1041 capsule, unwrappable by the recipient
     const { rumor, round } = await unwrapCapsule(recipient, firstMsg.wrap)
@@ -93,16 +93,16 @@ describe('LastpubClient E2E (Mini-Relay + Tower)', () => {
     expect((await client.readDraft(sw)).message).toBe('first draft')
 
     // Check-in with edit (§4.3): old job gone, new job present, draft updated
-    const before = firstMsg.requestId
+    const before = firstMsg.placements[0].requestId
     const after = await client.checkin(sw, {
       messageId: firstMsg.id,
       message: 'second draft',
     })
     const afterMsg = after.messages[0]
     expect(afterMsg.id).toBe(firstMsg.id) // message keeps its identity
-    expect(afterMsg.requestId).not.toBe(before)
+    expect(afterMsg.placements[0].requestId).not.toBe(before)
     expect(running.db.getJobByRequestId(before)).toBeUndefined()
-    expect(running.db.getJobByRequestId(afterMsg.requestId)?.status).toBe('scheduled')
+    expect(running.db.getJobByRequestId(afterMsg.placements[0].requestId)?.status).toBe('scheduled')
     expect(running.db.lastCheckinAt(authorPub)).toBe(after.lastCheckinAt)
     expect(store.pending).toBeNull() // success rule satisfied → journal empty
     expect((await client.readDraft(after)).message).toBe('second draft')
@@ -118,16 +118,16 @@ describe('LastpubClient E2E (Mini-Relay + Tower)', () => {
 
     // delete (§4.4): silent, job hard gone
     await client.deleteSwitch(after)
-    expect(running.db.getJobByRequestId(afterMsg.requestId)).toBeUndefined()
+    expect(running.db.getJobByRequestId(afterMsg.placements[0].requestId)).toBeUndefined()
     expect(store.switch).toBeNull()
   }, 30_000)
 
   it('restore from export and from relay reconstructs a resumable switch', async () => {
     // A fresh author, so the relay view for restore is isolated.
     const a = new LocalSigner(generateSecretKey())
-    const towerNpub = nip19.npubEncode(running.towerPub)
+    const towerNpubs = [nip19.npubEncode(running.towerPub)]
     const rSk = generateSecretKey()
-    const origin = new LastpubClient(a, { relays: [relay.url], towerNpub }, new MemoryStore())
+    const origin = new LastpubClient(a, { relays: [relay.url], towerNpubs }, new MemoryStore())
     const sw = await origin.createSwitch({
       message: 'recover me',
       recipientNpub: nip19.npubEncode(getPublicKey(rSk)),
@@ -139,13 +139,13 @@ describe('LastpubClient E2E (Mini-Relay + Tower)', () => {
 
     // Fresh install #1: import the export file.
     const storeX = new MemoryStore()
-    const fromExport = new LastpubClient(a, { relays: [relay.url], towerNpub }, storeX)
+    const fromExport = new LastpubClient(a, { relays: [relay.url], towerNpubs }, storeX)
     const rx = await fromExport.restoreFromExport(exp)
     expect(rx.switchId).toBe(sw.switchId)
     expect(rx.interval).toBe(30 * 86400)
-    expect(rx.towerPub).toBe(running.towerPub)
+    expect(rx.towerPubs).toContain(running.towerPub)
     expect(rx.messages[0].recipient).toBe(msg.recipient)
-    expect(rx.messages[0].requestId).toBe(msg.requestId)
+    expect(rx.messages[0].placements[0].requestId).toBe(msg.placements[0].requestId)
     expect(rx.messages[0].wrap.id).toBe(msg.wrap.id)
     expect(storeX.switch?.switchId).toBe(sw.switchId)
     expect((await fromExport.readDraft(rx)).message).toBe('recover me')
@@ -153,13 +153,61 @@ describe('LastpubClient E2E (Mini-Relay + Tower)', () => {
 
     // Fresh install #2: nothing but the key — rebuild from the relays.
     const storeR = new MemoryStore()
-    const fromRelay = new LastpubClient(a, { relays: [relay.url], towerNpub }, storeR)
+    const fromRelay = new LastpubClient(a, { relays: [relay.url], towerNpubs }, storeR)
     const rr = await fromRelay.restoreFromRelay()
     expect(rr?.switchId).toBe(sw.switchId)
-    expect(rr?.towerPub).toBe(running.towerPub)
-    expect(rr?.messages[0].requestId).toBe(msg.requestId)
+    expect(rr?.towerPubs).toContain(running.towerPub)
+    expect(rr?.messages[0].placements[0].requestId).toBe(msg.placements[0].requestId)
     expect(rr?.messages[0].wrap.id).toBe(msg.wrap.id)
     expect((await fromRelay.readDraft(rr!)).message).toBe('recover me')
     fromRelay.close()
+  }, 30_000)
+
+  it('redundancy: the same capsule is deposited with every tower', async () => {
+    const tower2 = await startTower({
+      signer: new LocalSigner(generateSecretKey()),
+      relays: [relay.url],
+      fallbackRelays: [relay.url],
+      tickMs: 100,
+    })
+    const a = new LocalSigner(generateSecretKey())
+    const rSk = generateSecretKey()
+    const c = new LastpubClient(
+      a,
+      {
+        relays: [relay.url],
+        towerNpubs: [nip19.npubEncode(running.towerPub), nip19.npubEncode(tower2.towerPub)],
+      },
+      new MemoryStore(),
+    )
+    const sw = await c.createSwitch({
+      message: 'redundant',
+      recipientNpub: nip19.npubEncode(getPublicKey(rSk)),
+      interval: 30 * 86400,
+    })
+    const msg = sw.messages[0]
+    expect(sw.towerPubs).toHaveLength(2)
+    expect(msg.placements).toHaveLength(2)
+
+    // Each tower holds its own job, both pointing at the very same capsule.
+    const at = (towerPub: string) => msg.placements.find((p) => p.towerPub === towerPub)!.requestId
+    expect(running.db.getJobByRequestId(at(running.towerPub))?.wrap_id).toBe(msg.wrap.id)
+    expect(tower2.db.getJobByRequestId(at(tower2.towerPub))?.wrap_id).toBe(msg.wrap.id)
+
+    // A check-in renews the job at both towers (old gone, new scheduled at each).
+    const before1 = at(running.towerPub)
+    const before2 = at(tower2.towerPub)
+    const after = await c.checkin(sw)
+    expect(after.messages[0].placements).toHaveLength(2)
+    expect(running.db.getJobByRequestId(before1)).toBeUndefined() // tower1's old job cancelled
+    expect(tower2.db.getJobByRequestId(before2)).toBeUndefined() // tower2's old job cancelled
+    const newAt = (t: string) =>
+      after.messages[0].placements.find((p) => p.towerPub === t)!.requestId
+    expect(running.db.getJobByRequestId(newAt(running.towerPub))?.status).toBe('scheduled')
+    expect(tower2.db.getJobByRequestId(newAt(tower2.towerPub))?.status).toBe('scheduled')
+
+    await c.deleteSwitch(after)
+    c.close()
+    await tower2.stop()
   }, 30_000)
 })

@@ -22,7 +22,8 @@ export type LastpubExportV1 = {
   type: 'lastpub-export'
   exported_at: number
   capsule: { wrap: Event; nevent: string }
-  job: { request_id: string; tower: string; publish_at: number }
+  /** One entry per tower the capsule was deposited with (redundancy). */
+  jobs: { request_id: string; tower: string; publish_at: number }[]
   draft_wrap?: Event
   drand: { chain: string; genesis: number; period: number }
 }

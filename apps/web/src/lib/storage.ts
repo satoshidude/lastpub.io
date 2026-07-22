@@ -26,7 +26,10 @@ const DEFAULT_RELAYS: string[] = (
   .map((s: string) => s.trim())
   .filter(Boolean)
 
-const DEFAULT_TOWER_NPUB: string = import.meta.env?.VITE_DEFAULT_TOWER_NPUB ?? ''
+const DEFAULT_TOWER_NPUBS: string[] = (import.meta.env?.VITE_DEFAULT_TOWER_NPUB ?? '')
+  .split(',')
+  .map((s: string) => s.trim())
+  .filter(Boolean)
 
 const KEYS = { settings: 'lastpub.settings', switch: 'lastpub.switch', pending: 'lastpub.pending' }
 
@@ -40,37 +43,80 @@ function read<T>(key: string): T | null {
   }
 }
 
-/** Legacy state (flat, one message in the switch object) → new model. */
+type OldMessage = { requestId?: string; placements?: unknown } & Record<string, unknown>
+
+/**
+ * Normalize any earlier persisted shape to the current model: a flat
+ * single-message switch, or a `messages[]` switch keyed by a single
+ * `towerPub`/`requestId`, both become `towerPubs[]` + per-message
+ * `placements[]`.
+ */
 function migrateSwitch(raw: unknown): SwitchData | null {
   if (!raw || typeof raw !== 'object') return null
-  const r = raw as Record<string, never> & { [k: string]: unknown }
-  if (Array.isArray(r.messages)) return raw as SwitchData
-  if (!r.wrap) return null
+  const r = raw as Record<string, unknown>
+
+  const towerPubs = Array.isArray(r.towerPubs)
+    ? (r.towerPubs as string[])
+    : r.towerPub
+      ? [r.towerPub as string]
+      : []
+
+  let messages: OldMessage[]
+  if (Array.isArray(r.messages)) {
+    messages = r.messages as OldMessage[]
+  } else if (r.wrap) {
+    // oldest flat shape: one message inlined on the switch
+    messages = [
+      {
+        recipient: r.recipient,
+        requestId: r.requestId,
+        wrap: r.wrap,
+        wrapEphemeralKey: r.wrapEphemeralKey,
+        draftWrap: r.draftWrap,
+        concealmentBroken: r.concealmentBroken,
+      } as OldMessage,
+    ]
+  } else {
+    return null
+  }
+
   return {
     switchId: r.switchId as string,
-    towerPub: (r.towerPub as string) ?? '',
+    towerPubs,
     interval: r.interval as number,
     lastCheckinAt: r.lastCheckinAt as number,
     publishAt: r.publishAt as number,
-    messages: [
-      {
-        id: crypto.randomUUID(),
-        recipient: r.recipient as string,
-        requestId: r.requestId as string,
-        wrap: r.wrap as Event,
-        wrapEphemeralKey: (r.wrapEphemeralKey as string) ?? '',
-        draftWrap: r.draftWrap as Event,
-        concealmentBroken: (r.concealmentBroken as boolean) ?? false,
-      },
-    ],
+    messages: messages.map((m) => ({
+      id: (m.id as string) ?? crypto.randomUUID(),
+      recipient: m.recipient as string,
+      placements: Array.isArray(m.placements)
+        ? (m.placements as MessageData['placements'])
+        : towerPubs.map((t) => ({ towerPub: t, requestId: (m.requestId as string) ?? '' })),
+      wrap: m.wrap as Event,
+      wrapEphemeralKey: (m.wrapEphemeralKey as string) ?? '',
+      draftWrap: m.draftWrap as Event,
+      concealmentBroken: (m.concealmentBroken as boolean) ?? false,
+    })),
   }
+}
+
+function migrateSettings(raw: unknown): Settings | null {
+  if (!raw || typeof raw !== 'object') return null
+  const r = raw as Record<string, unknown>
+  const relays = Array.isArray(r.relays) ? (r.relays as string[]) : [...DEFAULT_RELAYS]
+  const towerNpubs = Array.isArray(r.towerNpubs)
+    ? (r.towerNpubs as string[])
+    : r.towerNpub
+      ? [r.towerNpub as string]
+      : [...DEFAULT_TOWER_NPUBS]
+  return { relays, towerNpubs }
 }
 
 export const storage = {
   loadSettings: (): Settings =>
-    read<Settings>(KEYS.settings) ?? {
+    migrateSettings(read(KEYS.settings)) ?? {
       relays: [...DEFAULT_RELAYS],
-      towerNpub: DEFAULT_TOWER_NPUB,
+      towerNpubs: [...DEFAULT_TOWER_NPUBS],
     },
   saveSettings: (s: Settings) => localStorage.setItem(KEYS.settings, JSON.stringify(s)),
   loadSwitch: (): SwitchData | null => migrateSwitch(read(KEYS.switch)),

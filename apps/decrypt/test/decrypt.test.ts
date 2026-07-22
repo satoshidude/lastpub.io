@@ -78,8 +78,7 @@ describe('Decrypt page: logic (§5)', () => {
     })
     const exportFile = buildExport({
       wrap,
-      jobRequestId: 'a'.repeat(64),
-      tower: 'b'.repeat(64),
+      jobs: [{ requestId: 'a'.repeat(64), tower: 'b'.repeat(64) }],
       publishAt: now + 86400,
       relays: [relay.url],
     })

@@ -1,16 +1,23 @@
 import type { Event } from '@lastpub/core'
 
-/** Relay set + tower the client talks to. */
+/** Relay set + the towers the client talks to (more than one = redundancy). */
 export type Settings = {
   relays: string[]
-  towerNpub: string
+  towerNpubs: string[]
 }
 
-/** A message: its own recipient, draft, capsule and 5905 job. */
+/** Where one message's capsule is scheduled: a request id per tower. */
+export type Placement = {
+  towerPub: string // hex
+  requestId: string
+}
+
+/** A message: its own recipient, draft, capsule and a 5905 job per tower. */
 export type MessageData = {
   id: string
   recipient: string // hex
-  requestId: string
+  /** One scheduled job per tower (redundancy): if any tower survives, it fires. */
+  placements: Placement[]
   wrap: Event
   /** Ephemeral secret of the current wrap (retained; wraps sign with a throwaway key). */
   wrapEphemeralKey: string
@@ -22,24 +29,30 @@ export type MessageData = {
 /** The switch: time model + check-in anchor. One switch per npub. */
 export type SwitchData = {
   switchId: string
-  /** Tower pubkey (hex), fixed at creation — independent of later settings changes. */
-  towerPub: string
+  /** Tower pubkeys (hex), fixed at creation — independent of later settings changes. */
+  towerPubs: string[]
   interval: number
   lastCheckinAt: number
   publishAt: number
   messages: MessageData[]
 }
 
+/** A signed job (+ optional cancel of the old one) for one tower. */
+export type PendingPlacement = {
+  towerPub: string
+  job: Event
+  cancel: Event | null
+}
+
 /**
  * Journal for the success rule (§4.3): fully signed stage-5 events are
  * persisted before sending — a retry repeats only stage 5, without a new
- * NIP-07 cycle. One entry per message.
+ * NIP-07 cycle. One entry per message, each with a job per tower.
  */
 export type PendingItem = {
   messageId: string
   recipient: string
-  cancel: Event | null
-  job: Event
+  placements: PendingPlacement[]
   wrap: Event
   wrapEphemeralKey: string
   draftWrap: Event

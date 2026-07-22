@@ -23,13 +23,18 @@ describe('web storage adapter', () => {
     const s = storage.loadSettings()
     expect(Array.isArray(s.relays)).toBe(true)
     expect(s.relays.length).toBeGreaterThan(0)
-    expect(typeof s.towerNpub).toBe('string')
+    expect(Array.isArray(s.towerNpubs)).toBe(true)
+  })
+
+  it('migrates legacy single-tower settings to towerNpubs[]', () => {
+    store.set('lastpub.settings', JSON.stringify({ relays: ['wss://r'], towerNpub: 'npub1x' }))
+    expect(storage.loadSettings().towerNpubs).toEqual(['npub1x'])
   })
 
   it('save/clear switch round-trips through localStorage', () => {
     const sw = {
       switchId: 's1',
-      towerPub: 'abc',
+      towerPubs: ['abc'],
       interval: 100,
       lastCheckinAt: 1,
       publishAt: 101,
@@ -41,9 +46,9 @@ describe('web storage adapter', () => {
     expect(storage.loadSwitch()).toBeNull()
   })
 
-  it('migrates a legacy flat switch (one message inline) to messages[]', () => {
-    // The pre-messages[] shape: recipient/wrap/etc. sat directly on the switch,
-    // and it still carried the now-removed grace/roundTime fields.
+  it('migrates a legacy flat single-tower switch to towerPubs[] + placements[]', () => {
+    // The oldest shape: recipient/wrap/requestId sat directly on the switch,
+    // keyed by a single towerPub, and it still carried grace/roundTime.
     const legacy = {
       switchId: 's2',
       towerPub: 'tower',
@@ -61,14 +66,15 @@ describe('web storage adapter', () => {
     store.set('lastpub.switch', JSON.stringify(legacy))
 
     const migrated = storage.loadSwitch()
+    expect(migrated?.towerPubs).toEqual(['tower'])
     expect(migrated?.messages).toHaveLength(1)
     expect(migrated?.messages[0].recipient).toBe('recipientHex')
-    expect(migrated?.messages[0].requestId).toBe('req9')
+    expect(migrated?.messages[0].placements).toEqual([{ towerPub: 'tower', requestId: 'req9' }])
     expect(migrated?.messages[0].concealmentBroken).toBe(false)
     expect(migrated?.messages[0].id).toBeTruthy() // a fresh id was minted
-    // grace/roundTime are dropped by the migration
+    // dropped fields
     expect((migrated as Record<string, unknown>)?.grace).toBeUndefined()
-    expect((migrated as Record<string, unknown>)?.roundTime).toBeUndefined()
+    expect((migrated as Record<string, unknown>)?.towerPub).toBeUndefined()
   })
 
   it('discards a legacy pending journal without items', () => {
