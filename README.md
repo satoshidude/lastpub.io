@@ -96,11 +96,21 @@ Switch state lives in the browser, but it is not the only copy: your drafts and 
 scheduled job (which embeds the capsule) are published to the relays, and the export file
 is a self-contained snapshot. On a new device or after clearing storage, sign in and
 **restore from relay** (just your nsec and the relays) or **import an export file** to
-rebuild the switch and resume check-ins. A check-in renews at the tower(s) in your
+rebuild the switch and resume check-ins. A check-in renews at the tower in your
 settings, so if the host that ran your tower disappears, point settings at a live tower —
 your own (`npm run dev-stack`) or any other — and check in to migrate; nothing but you
 and the relays is required. The standalone decrypt page reads a message from its nevent
 or export file alone, so a recipient never depends on this app or any single host.
+
+The switch rests on one tower, and that is a deliberate trade, not an oversight. A tower
+outage fails closed — a tower that is down never broadcasts, so the message stays concealed;
+it never publishes early. The capsule is not trapped inside the tower either: it rides on the
+relays inside the scheduled job, so while you are alive a lost tower is recoverable (migrate,
+or restore). The one case nothing recovers from is the overlap that matters most — you are gone
+*and* the tower dies before the deadline — because no one is left to migrate it. So run your
+tower on durable infrastructure that is not tied to a domain or bill that may lapse, and keep
+the export file as a copy an heir can broadcast. Confidentiality-preserving redundancy
+(threshold keepers, not duplicate towers) is a future direction, not shipped today.
 
 ## Standards
 

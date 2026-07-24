@@ -336,6 +336,18 @@ Poll loop (1 s tick) over `idx_jobs_due`:
 
 Kind-5 with `e` = `request_id`, author == job author → delete job + wrap (`DELETE`, no soft delete: the withholding store should not keep corpses), 7000 `success/cancelled`. Completely silent toward the recipient (delete before trigger).
 
+### 3.6 Single-tower failure model (why one holder, and what it costs)
+
+lastpub deposits the capsule with exactly **one** tower — a deliberate choice against N-tower fan-out. The rationale and its honest consequences:
+
+**Why not many towers.** Depositing the same capsule with N towers is OR-redundancy: any one tower can broadcast, so any single tower that leaks the withheld wrap or fires early breaks concealment — N towers multiply the leak surface for one secret. It also inverts availability: because each tower fires independently at its own `publish_at`, a renewal must reach *every* tower or a lagging one fires the stale (earlier) deadline; more towers thus make the trigger safer but the check-in more fragile (all must be reachable and confirm). Redundancy that helps rather than harms confidentiality is threshold sharing (t-of-n key shares, one per keeper), not capsule duplication — the intended future direction, not shipped here.
+
+**What one tower means for delivery.**
+
+- **Fail-closed.** A dead tower never broadcasts, so the secret stays secret. A tower outage cannot cause the dangerous direction (premature publication); it can only cause a missed delivery.
+- **The capsule is not trapped in the tower.** The withheld wrap rides inside the 5905 job on the relays (encrypted to the tower; the author shares that conversation key and can read it back). While the author is alive the tower is therefore replaceable — point settings at another tower and check in (migration, §4.3), or restore from relays/export. Domain or host loss is recoverable by the living author.
+- **The one unrecoverable case** is the overlap that matters most: the author is gone **and** the tower dies before `publish_at`. Then no one migrates it and the capsule never fires. This is inherent to any single holder, not to any particular host. It is the strongest argument for threshold keepers later; until then the mitigation is operational — run the tower on durable infrastructure decoupled from any single domain or billing lifecycle, with monitoring and auto-restart, and keep the export file (§4.5) as an heir-usable copy.
+
 ---
 
 ## 4. Client flows (minimal UI, SvelteKit)
@@ -363,20 +375,20 @@ PUBLISHED is terminal — there is no path back to ACTIVE. Broadcast and readabi
 
 ### 4.3 Check-in flow (5 stages) with success rule
 
-1. Sign 1042, gift-wrap it, send to **all** registered towers.
+1. Sign 1042, gift-wrap it, send to the tower.
 2. Decrypt draft wrap (`readDraftWrap`).
 3. Set new anchor: `lastCheckinAt = created_at` of the 1042 → `computeSchedule`.
 4. Rebuild capsule (`renewCapsule`; if editing, rebuild the draft wrap first).
-5. Per tower: Kind-5 cancellation of the old job + new 5905 job; wait for 7000 `success/scheduled`.
+5. Kind-5 cancellation of the old job + new 5905 job; wait for 7000 `success/scheduled`.
 
-**Success rule (applies from the first tower onward):** the check-in counts as successful only once stage 5 is confirmed via 7000 by **all** towers. The client persists the flow state (localStorage) as a journal `{checkin_event, per_tower: {sent, confirmed}}`:
+**Success rule:** the check-in counts as successful only once stage 5 is confirmed via 7000 by the tower. The client persists the flow state (localStorage) as a journal `{checkin_event, sent, confirmed}`:
 
 - Partial success / abort → state WARN, banner "check-in incomplete", automatic retry (backoff 30 s / 2 min / 10 min, then manual) — retry repeats **only** stage 5 with the already-built capsule (the journal holds the finished wrap; no new NIP-07 cycle needed).
 - Rationale: a timer reset without payload renewal would publish a capsule sealed to an already-past round at trigger, since `publish_at` and `round` now coincide (§1.1) — the capsule must be rebuilt against the new deadline. That is why the tower does not confirm 1042 as a reset (§3.3); only the new job counts.
 
 ### 4.4 Delete
 
-**Delete (before the trigger)** is the only way to stop a switch: `buildCancel` to all towers + server deletion + NIP-09 on draft wraps (best effort). Silent — the recipient never learns the switch existed.
+**Delete (before the trigger)** is the only way to stop a switch: `buildCancel` to the tower + server deletion + NIP-09 on draft wraps (best effort). Silent — the recipient never learns the switch existed.
 
 After the trigger there is nothing to delete: the tower has broadcast the 1059 and, by construction, its round has been reached (§1.1) — the recipient can already read it. It cannot be recalled. The client marks the switch PUBLISHED (§4.1) and shows a permanent notice "concealment toward this recipient broken".
 
