@@ -5,9 +5,9 @@
   import { LastpubClient, FeedbackError } from '@lastpub/client'
   import { storage, type PendingStage5, type Settings, type SwitchData } from '$lib/storage.js'
 
-  let settings: Settings = { relays: [], towerNpubs: [] }
+  let settings: Settings = { relays: [], towerNpub: '' }
   let relaysInput = ''
-  let towersInput = ''
+  let towerInput = ''
   let signer: Signer | null = null
   let client: LastpubClient | null = null
   let pubkey = ''
@@ -35,7 +35,7 @@
   onMount(() => {
     settings = storage.loadSettings()
     relaysInput = settings.relays.join(', ')
-    towersInput = settings.towerNpubs.join(', ')
+    towerInput = settings.towerNpub
     sw = storage.loadSwitch()
     pending = storage.loadPending()
   })
@@ -76,7 +76,7 @@
 
   function saveSettings(): void {
     settings.relays = relaysInput.split(',').map((s) => s.trim()).filter(Boolean)
-    settings.towerNpubs = towersInput.split(',').map((s) => s.trim()).filter(Boolean)
+    settings.towerNpub = towerInput.trim()
     storage.saveSettings(settings)
     if (signer) client = new LastpubClient(signer, settings, storage)
   }
@@ -198,7 +198,7 @@
 <main>
   <h1>lastpub <span class="tag">publish after silence</span></h1>
 
-  <details class="panel" open={!settings.towerNpubs.length}>
+  <details class="panel" open={!settings.towerNpub}>
     <summary>Settings</summary>
     <label>
       Relays (comma-separated)
@@ -207,19 +207,20 @@
     <p class="muted small help">
       WebSocket URLs of the nostr relays this app publishes to and reads from. Use relays
       that accept writes from anyone — public ones like <code>wss://nos.lol</code> or
-      <code>wss://relay.damus.io</code>, or your own. Every tower must be reachable on at
+      <code>wss://relay.damus.io</code>, or your own. The tower must be reachable on at
       least one of them. This demo is preconfigured with public relays.
     </p>
     <label>
-      Tower npubs (comma-separated)
-      <input bind:value={towersInput} placeholder="npub1…, npub1…" />
+      Tower npub
+      <input bind:value={towerInput} placeholder="npub1…" />
     </label>
     <p class="muted small help">
-      Public keys of the schedulers (“towers”) that hold your sealed message and publish it
-      if you fall silent. A tower is a separate service you have to trust — not your own
-      key, and not a relay. <strong>List more than one for redundancy:</strong> the capsule
-      is deposited with each, and if any single tower survives to your deadline, the message
-      still fires. Get one from a tower operator, or run your own with
+      Public key of the scheduler (“tower”) that holds your sealed message and publishes it
+      if you fall silent. A tower is a separate service you have to trust — not your own key,
+      and not a relay. A tower outage fails safe: it never publishes early, and while you are
+      alive you can point this field at another tower and check in to migrate. The one thing
+      it cannot survive is dying after you are gone — so a tower should run on durable
+      infrastructure. Get one from a tower operator, or run your own with
       <code>npm run dev-stack</code>, which prints its npub. This demo is preconfigured with
       one public reference tower.
     </p>
@@ -337,7 +338,7 @@
           </button>
         </div>
         <p class="muted small help">
-          A check-in renews the switch at the tower(s) in your Settings — so if a tower (or
+          A check-in renews the switch at the tower in your Settings — so if the tower (or
           the host that ran it) goes away, point Settings at a live one and check in to
           migrate. It stays put as long as Settings are unchanged.
         </p>
@@ -356,12 +357,7 @@
               To <code title={nip19.npubEncode(msg.recipient)}>{npubShort(msg.recipient)}</code>
               <span class="muted small">
                 ·
-                <span
-                  title={msg.placements.map((p) => nip19.npubEncode(p.towerPub)).join('\n')}
-                  >{msg.placements.length === 1
-                    ? '1 tower'
-                    : `${msg.placements.length} towers (redundant)`}</span
-                > ·
+                <span title={nip19.npubEncode(msg.placement.towerPub)}>tower</span> ·
                 <a
                   href="https://njump.me/{neventOf(msg.wrap.id, msg.wrap.pubkey)}"
                   target="_blank"

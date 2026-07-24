@@ -24,7 +24,6 @@ import type {
   ClientOptions,
   MessageData,
   PendingItem,
-  PendingPlacement,
   PendingStage5,
   Placement,
   Settings,
@@ -55,15 +54,13 @@ export class LastpubClient {
     private readonly options: ClientOptions = {},
   ) {}
 
-  /** Configured tower pubkeys (hex); more than one means redundancy. */
-  get towerPubs(): string[] {
-    const pubs = (this.settings.towerNpubs ?? []).map((npub) => {
-      const decoded = nip19.decode(npub)
-      if (decoded.type !== 'npub') throw new Error(`Invalid tower npub: ${npub}`)
-      return decoded.data
-    })
-    if (pubs.length === 0) throw new Error('No tower configured')
-    return pubs
+  /** Configured tower pubkey (hex). */
+  get towerPub(): string {
+    const npub = this.settings.towerNpub?.trim()
+    if (!npub) throw new Error('No tower configured')
+    const decoded = nip19.decode(npub)
+    if (decoded.type !== 'npub') throw new Error(`Invalid tower npub: ${npub}`)
+    return decoded.data
   }
 
   /**
@@ -132,49 +129,43 @@ export class LastpubClient {
   }
 
   /**
-   * Build the capsule once, then a 5905 job for each tower (stage 4 + stage-5
-   * preparation). The same capsule deposited with several towers is the
-   * redundancy: any surviving tower fires it, and a duplicate broadcast is
-   * idempotent. `oldPlacements` supplies the per-tower request id to cancel
-   * when renewing.
+   * Build the capsule and a 5905 job for the tower (stage 4 + stage-5
+   * preparation). `oldPlacement` supplies the previous job to cancel when
+   * renewing — its cancel targets the tower that held it (the same tower on a
+   * plain renewal, or the old tower on migration, since the cancel carries its
+   * own `p` tag), while the new job targets the current tower.
    */
   private async buildMessageArtifacts(args: {
-    towers: string[]
+    tower: string
     message: string
     recipient: string
     round: number
     publishAt: number
     messageId: string
     draftWrap: Event
-    oldPlacements?: Placement[]
+    oldPlacement?: Placement
   }): Promise<PendingItem & { publishAt: number }> {
     const { wrap, wrapEphemeralKey } = await createCapsule(this.signer, {
       plaintext: args.message,
       recipient: args.recipient,
       round: args.round,
     })
-    const placements: PendingPlacement[] = []
-    for (const tower of args.towers) {
-      const job = await buildJobRequest(this.signer, {
-        wrap,
-        publishAt: args.publishAt,
-        relays: this.settings.relays,
-        tower,
-        // Each message is its own slot on the tower, so several messages per
-        // switch coexist instead of overwriting one another (§3.2).
-        slot: args.messageId,
-      })
-      const oldReq = args.oldPlacements?.find((p) => p.towerPub === tower)?.requestId
-      placements.push({
-        towerPub: tower,
-        job,
-        cancel: oldReq ? await buildCancel(this.signer, oldReq, tower) : null,
-      })
-    }
+    const job = await buildJobRequest(this.signer, {
+      wrap,
+      publishAt: args.publishAt,
+      relays: this.settings.relays,
+      tower: args.tower,
+      // Each message is its own slot on the tower, so several messages per
+      // switch coexist instead of overwriting one another (§3.2).
+      slot: args.messageId,
+    })
+    const cancel = args.oldPlacement
+      ? await buildCancel(this.signer, args.oldPlacement.requestId, args.oldPlacement.towerPub)
+      : null
     return {
       messageId: args.messageId,
       recipient: args.recipient,
-      placements,
+      placement: { towerPub: args.tower, job, cancel },
       wrap,
       wrapEphemeralKey,
       draftWrap: args.draftWrap,
@@ -206,9 +197,9 @@ export class LastpubClient {
     })
     await this.publish(draftWrap).catch(() => {}) // relays are a secondary copy, best effort
 
-    const towers = this.towerPubs
+    const tower = this.towerPub
     const artifacts = await this.buildMessageArtifacts({
-      towers,
+      tower,
       message: args.message,
       recipient,
       round: schedule.round,
@@ -216,15 +207,13 @@ export class LastpubClient {
       messageId,
       draftWrap,
     })
-    // Deposit with every tower; the switch is armed only once all confirm.
-    for (const p of artifacts.placements) await this.publish(p.job)
-    await Promise.all(
-      artifacts.placements.map((p) => this.awaitFeedback(p.towerPub, p.job.id, 'scheduled')),
-    )
+    // Deposit with the tower; the switch is armed only once it confirms.
+    await this.publish(artifacts.placement.job)
+    await this.awaitFeedback(artifacts.placement.towerPub, artifacts.placement.job.id, 'scheduled')
 
     const data: SwitchData = {
       switchId,
-      towerPubs: towers,
+      towerPub: tower,
       interval: args.interval,
       lastCheckinAt: now,
       publishAt: schedule.publishAt,
@@ -232,10 +221,10 @@ export class LastpubClient {
         {
           id: messageId,
           recipient,
-          placements: artifacts.placements.map((p) => ({
-            towerPub: p.towerPub,
-            requestId: p.job.id,
-          })),
+          placement: {
+            towerPub: artifacts.placement.towerPub,
+            requestId: artifacts.placement.job.id,
+          },
           wrap: artifacts.wrap,
           wrapEphemeralKey: artifacts.wrapEphemeralKey,
           draftWrap,
@@ -248,7 +237,7 @@ export class LastpubClient {
   }
 
   /**
-   * Check-in flow, 5 stages (§4.3): one 1042, then ALL messages are renewed
+   * Check-in flow, 5 stages (§4.3): one 1042, then every message is renewed
    * (new round, new capsule, new job). `edited` replaces the text of exactly
    * one message beforehand; `timing` changes the interval from now on.
    */
@@ -263,18 +252,16 @@ export class LastpubClient {
     // this check-in (a reschedule), so the whole switch is rebuilt against it.
     const interval = timing?.interval ?? current.interval
 
-    // Renewal targets the towers in the current settings, not the ones fixed at
+    // Renewal targets the tower in the current settings, not the one fixed at
     // creation — so a switch recovered on a fresh install (its original host and
-    // tower gone) can be migrated to a live tower simply by pointing settings at
-    // it and checking in. Towers dropped from the set are cancelled below.
-    const towers = this.towerPubs
+    // tower gone) can be migrated to a live tower by pointing settings at it and
+    // checking in. The old job is cancelled at whichever tower held it.
+    const tower = this.towerPub
 
-    // Stage 1: sign one 1042 and gift-wrap it to EACH tower
+    // Stage 1: sign one 1042 and gift-wrap it to the tower
     const checkinEvent = await createCheckin(this.signer, { switchId: current.switchId })
-    for (const tower of towers) {
-      const wrappedCheckin = await wrapRumor(this.signer, checkinEvent as unknown as Rumor, tower)
-      await this.publish(wrappedCheckin)
-    }
+    const wrappedCheckin = await wrapRumor(this.signer, checkinEvent as unknown as Rumor, tower)
+    await this.publish(wrappedCheckin)
 
     // Stage 3: new shared trigger for all messages
     const schedule = computeSchedule(checkinEvent.created_at, interval)
@@ -291,8 +278,7 @@ export class LastpubClient {
       ) {
         draftWrap = await createDraftWrap(this.signer, {
           switch_id: current.switchId,
-          message:
-            edited && edited.messageId === msg.id ? edited.message : draft.message,
+          message: edited && edited.messageId === msg.id ? edited.message : draft.message,
           recipient: msg.recipient,
           interval,
           updated_at: checkinEvent.created_at,
@@ -301,25 +287,16 @@ export class LastpubClient {
         draft = await readDraftWrap(this.signer, draftWrap)
       }
       const artifacts = await this.buildMessageArtifacts({
-        towers,
+        tower,
         message: draft.message,
         recipient: msg.recipient,
         round: schedule.round,
         publishAt: schedule.publishAt,
         messageId: msg.id,
         draftWrap,
-        oldPlacements: msg.placements,
+        oldPlacement: msg.placement,
       })
       items.push(artifacts)
-
-      // Cancel jobs at towers dropped from the set (best effort): a dropped but
-      // still-live tower would otherwise fire the old capsule at the old deadline.
-      for (const old of msg.placements) {
-        if (!towers.includes(old.towerPub)) {
-          const cancel = await buildCancel(this.signer, old.requestId, old.towerPub)
-          await this.publish(cancel).catch(() => {})
-        }
-      }
     }
 
     // Stage 5: signed events into the journal, then send (success rule §4.3)
@@ -335,20 +312,20 @@ export class LastpubClient {
 
   /**
    * Execute stage 5 (again) — also used for the journal retry after partial
-   * success. Strict success rule: every tower of every message must confirm,
-   * so no tower is left holding a stale deadline that could fire early.
+   * success. The check-in counts only once the tower confirms every message's
+   * new job, so the tower is never left holding a stale deadline that could
+   * fire early.
    */
   async completeStage5(current: SwitchData, pending: PendingStage5): Promise<SwitchData> {
     this.assertSingleMessage(current)
     for (const item of pending.items) {
-      for (const p of item.placements) {
-        if (p.cancel) await this.publish(p.cancel)
-        await this.publish(p.job)
-      }
+      const p = item.placement
+      if (p.cancel) await this.publish(p.cancel)
+      await this.publish(p.job)
     }
     await Promise.all(
-      pending.items.flatMap((item) =>
-        item.placements.map((p) => this.awaitFeedback(p.towerPub, p.job.id, 'scheduled')),
+      pending.items.map((item) =>
+        this.awaitFeedback(item.placement.towerPub, item.placement.job.id, 'scheduled'),
       ),
     )
 
@@ -362,7 +339,7 @@ export class LastpubClient {
       if (!item) return msg
       return {
         ...msg,
-        placements: item.placements.map((p) => ({ towerPub: p.towerPub, requestId: p.job.id })),
+        placement: { towerPub: item.placement.towerPub, requestId: item.placement.job.id },
         wrap: item.wrap,
         wrapEphemeralKey: item.wrapEphemeralKey,
         draftWrap: item.draftWrap,
@@ -371,8 +348,8 @@ export class LastpubClient {
     })
     const data: SwitchData = {
       ...current,
-      // The switch now lives at exactly the towers it was just scheduled with.
-      towerPubs: [...new Set(pending.items.flatMap((i) => i.placements.map((p) => p.towerPub)))],
+      // The switch now lives at exactly the tower it was just scheduled with.
+      towerPub: pending.items[0]?.placement.towerPub ?? current.towerPub,
       interval: pending.interval,
       lastCheckinAt: pending.checkinAt,
       publishAt: pending.publishAt,
@@ -383,14 +360,13 @@ export class LastpubClient {
     return data
   }
 
-  /** Delete before trigger (§4.4): silent, hard cancel at every tower. */
+  /** Delete before trigger (§4.4): silent, hard cancel at the tower. */
   async deleteSwitch(current: SwitchData): Promise<void> {
     for (const msg of current.messages) {
-      for (const p of msg.placements) {
-        const cancel = await buildCancel(this.signer, p.requestId, p.towerPub)
-        await this.publish(cancel)
-        await this.awaitFeedback(p.towerPub, p.requestId, 'cancelled')
-      }
+      const p = msg.placement
+      const cancel = await buildCancel(this.signer, p.requestId, p.towerPub)
+      await this.publish(cancel)
+      await this.awaitFeedback(p.towerPub, p.requestId, 'cancelled')
     }
     this.storage.clearSwitch()
     this.storage.clearPending()
@@ -402,12 +378,12 @@ export class LastpubClient {
     return readDraftWrap(this.signer, msg.draftWrap)
   }
 
-  /** Ciphertext export (§4.5) for a message — carries every tower placement. */
+  /** Ciphertext export (§4.5) for a message — carries its tower placement. */
   buildExportFile(current: SwitchData, messageId?: string): LastpubExportV1 {
     const msg = this.messageOf(current, messageId)
     return buildExport({
       wrap: msg.wrap,
-      jobs: msg.placements.map((p) => ({ requestId: p.requestId, tower: p.towerPub })),
+      job: { requestId: msg.placement.requestId, tower: msg.placement.towerPub },
       publishAt: current.publishAt,
       relays: this.settings.relays,
       draftWrap: msg.draftWrap,
@@ -437,11 +413,11 @@ export class LastpubClient {
       throw new Error('This export has no draft, so the switch cannot be resumed from it')
     }
     const draft = await readDraftWrap(this.signer, exp.draft_wrap)
-    if (!exp.jobs?.length) throw new Error('This export has no job placements')
-    const publishAt = exp.jobs[0].publish_at
+    if (!exp.job) throw new Error('This export has no job placement')
+    const publishAt = exp.job.publish_at
     const data: SwitchData = {
       switchId: draft.switch_id,
-      towerPubs: exp.jobs.map((j) => j.tower),
+      towerPub: exp.job.tower,
       interval: draft.interval,
       lastCheckinAt: publishAt - draft.interval,
       publishAt,
@@ -449,7 +425,7 @@ export class LastpubClient {
         {
           id: crypto.randomUUID(),
           recipient: draft.recipient,
-          placements: exp.jobs.map((j) => ({ towerPub: j.tower, requestId: j.request_id })),
+          placement: { towerPub: exp.job.tower, requestId: exp.job.request_id },
           wrap: exp.capsule.wrap,
           wrapEphemeralKey: '',
           draftWrap: exp.draft_wrap,
@@ -491,13 +467,13 @@ export class LastpubClient {
 
     // 5905 jobs authored by us → tower (p tag), request id, and the encrypted
     // payload (wrap + publish_at) decrypted with the tower key. Keep the newest
-    // job per tower, so a redundant switch is rebuilt with all its placements.
+    // job, which is the current placement of the switch.
     const jobs = await this.pool.querySync(this.settings.relays, {
       kinds: [KIND_JOB],
       authors: [me],
     })
     type J = { tower: string; requestId: string; wrap: Event; publishAt: number; createdAt: number }
-    const perTower = new Map<string, J>()
+    let best: J | null = null
     for (const j of jobs) {
       const tower = j.tags.find((t) => t[0] === 'p')?.[1]
       if (!tower) continue
@@ -508,45 +484,41 @@ export class LastpubClient {
         if (!iTag || !paTag) continue
         const wrap = JSON.parse(iTag[1]) as Event
         if (!verifyCapsuleWrap(wrap).ok) continue
-        const prev = perTower.get(tower)
-        if (!prev || j.created_at > prev.createdAt) {
-          perTower.set(tower, {
+        if (!best || j.created_at > best.createdAt) {
+          best = {
             tower,
             requestId: j.id,
             wrap,
             publishAt: Number(paTag[2]),
             createdAt: j.created_at,
-          })
+          }
         }
       } catch {
         // not decryptable by us / not a job to a tower we can read
       }
     }
-    const found = [...perTower.values()]
-    if (found.length === 0) {
+    if (!best) {
       throw new Error(
         'Recovered your message draft, but no scheduled job is on these relays. ' +
           'Import your export file instead, or add the relay you originally used.',
       )
     }
-    // Canonical capsule/deadline from the newest job overall.
-    const canonical = found.reduce((a, b) => (b.createdAt > a.createdAt ? b : a))
 
     const data: SwitchData = {
       switchId: bestDraft.draft.switch_id,
-      towerPubs: found.map((j) => j.tower),
+      towerPub: best.tower,
       interval: bestDraft.draft.interval,
-      lastCheckinAt: canonical.publishAt - bestDraft.draft.interval,
-      publishAt: canonical.publishAt,
+      lastCheckinAt: best.publishAt - bestDraft.draft.interval,
+      publishAt: best.publishAt,
       messages: [
         {
           id: crypto.randomUUID(),
           recipient: bestDraft.draft.recipient,
-          placements: found.map((j) => ({ towerPub: j.tower, requestId: j.requestId })),
-          wrap: canonical.wrap,
+          placement: { towerPub: best.tower, requestId: best.requestId },
+          wrap: best.wrap,
           wrapEphemeralKey: '',
           draftWrap: bestDraft.wrap,
-          concealmentBroken: Math.floor(Date.now() / 1000) > canonical.publishAt,
+          concealmentBroken: Math.floor(Date.now() / 1000) > best.publishAt,
         },
       ],
     }

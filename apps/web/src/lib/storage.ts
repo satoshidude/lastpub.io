@@ -26,10 +26,11 @@ const DEFAULT_RELAYS: string[] = (
   .map((s: string) => s.trim())
   .filter(Boolean)
 
-const DEFAULT_TOWER_NPUBS: string[] = (import.meta.env?.VITE_DEFAULT_TOWER_NPUB ?? '')
-  .split(',')
-  .map((s: string) => s.trim())
-  .filter(Boolean)
+const DEFAULT_TOWER_NPUB: string =
+  (import.meta.env?.VITE_DEFAULT_TOWER_NPUB ?? '')
+    .split(',')
+    .map((s: string) => s.trim())
+    .filter(Boolean)[0] ?? ''
 
 const KEYS = { settings: 'lastpub.settings', switch: 'lastpub.switch', pending: 'lastpub.pending' }
 
@@ -43,23 +44,42 @@ function read<T>(key: string): T | null {
   }
 }
 
-type OldMessage = { requestId?: string; placements?: unknown } & Record<string, unknown>
+type OldMessage = {
+  requestId?: string
+  placements?: unknown
+  placement?: unknown
+} & Record<string, unknown>
 
 /**
- * Normalize any earlier persisted shape to the current model: a flat
- * single-message switch, or a `messages[]` switch keyed by a single
- * `towerPub`/`requestId`, both become `towerPubs[]` + per-message
- * `placements[]`.
+ * Normalize any earlier persisted shape to the current single-tower model. A
+ * flat single-message switch, or a `messages[]` switch keyed by an array of
+ * towers (`towerPubs[]` / per-message `placements[]`, from the multi-tower
+ * era), collapses to a single `towerPub` + per-message `placement`: the first
+ * tower is kept. A genuine multi-tower switch loses its extra placements here —
+ * those towers keep their own jobs until they fire or are cancelled by a
+ * check-in, so migrate by checking in once before upgrading if that matters.
  */
+function firstTower(r: Record<string, unknown>): string {
+  if (Array.isArray(r.towerPubs) && r.towerPubs.length) return r.towerPubs[0] as string
+  if (typeof r.towerPub === 'string') return r.towerPub
+  return ''
+}
+
+function migratePlacement(m: OldMessage, towerPub: string): MessageData['placement'] {
+  if (m.placement && typeof m.placement === 'object') {
+    return m.placement as MessageData['placement']
+  }
+  if (Array.isArray(m.placements) && m.placements.length) {
+    return (m.placements as MessageData['placement'][])[0]
+  }
+  return { towerPub, requestId: (m.requestId as string) ?? '' }
+}
+
 function migrateSwitch(raw: unknown): SwitchData | null {
   if (!raw || typeof raw !== 'object') return null
   const r = raw as Record<string, unknown>
 
-  const towerPubs = Array.isArray(r.towerPubs)
-    ? (r.towerPubs as string[])
-    : r.towerPub
-      ? [r.towerPub as string]
-      : []
+  const towerPub = firstTower(r)
 
   let messages: OldMessage[]
   if (Array.isArray(r.messages)) {
@@ -82,16 +102,14 @@ function migrateSwitch(raw: unknown): SwitchData | null {
 
   return {
     switchId: r.switchId as string,
-    towerPubs,
+    towerPub,
     interval: r.interval as number,
     lastCheckinAt: r.lastCheckinAt as number,
     publishAt: r.publishAt as number,
     messages: messages.map((m) => ({
       id: (m.id as string) ?? crypto.randomUUID(),
       recipient: m.recipient as string,
-      placements: Array.isArray(m.placements)
-        ? (m.placements as MessageData['placements'])
-        : towerPubs.map((t) => ({ towerPub: t, requestId: (m.requestId as string) ?? '' })),
+      placement: migratePlacement(m, towerPub),
       wrap: m.wrap as Event,
       wrapEphemeralKey: (m.wrapEphemeralKey as string) ?? '',
       draftWrap: m.draftWrap as Event,
@@ -104,19 +122,20 @@ function migrateSettings(raw: unknown): Settings | null {
   if (!raw || typeof raw !== 'object') return null
   const r = raw as Record<string, unknown>
   const relays = Array.isArray(r.relays) ? (r.relays as string[]) : [...DEFAULT_RELAYS]
-  const towerNpubs = Array.isArray(r.towerNpubs)
-    ? (r.towerNpubs as string[])
-    : r.towerNpub
-      ? [r.towerNpub as string]
-      : [...DEFAULT_TOWER_NPUBS]
-  return { relays, towerNpubs }
+  const towerNpub =
+    typeof r.towerNpub === 'string'
+      ? r.towerNpub
+      : Array.isArray(r.towerNpubs) && r.towerNpubs.length
+        ? (r.towerNpubs[0] as string)
+        : DEFAULT_TOWER_NPUB
+  return { relays, towerNpub }
 }
 
 export const storage = {
   loadSettings: (): Settings =>
     migrateSettings(read(KEYS.settings)) ?? {
       relays: [...DEFAULT_RELAYS],
-      towerNpubs: [...DEFAULT_TOWER_NPUBS],
+      towerNpub: DEFAULT_TOWER_NPUB,
     },
   saveSettings: (s: Settings) => localStorage.setItem(KEYS.settings, JSON.stringify(s)),
   loadSwitch: (): SwitchData | null => migrateSwitch(read(KEYS.switch)),

@@ -9,8 +9,8 @@ import type { Event, LastpubExportV1 } from './types.js'
  */
 export function buildExport(args: {
   wrap: Event
-  /** One entry per tower the capsule was deposited with (redundancy). */
-  jobs: { requestId: string; tower: string }[]
+  /** The scheduled job: the tower holding the capsule and its request id. */
+  job: { requestId: string; tower: string }
   publishAt: number
   relays: string[]
   draftWrap?: Event
@@ -28,11 +28,11 @@ export function buildExport(args: {
         author: args.wrap.pubkey,
       }),
     },
-    jobs: args.jobs.map((j) => ({
-      request_id: j.requestId,
-      tower: j.tower,
+    job: {
+      request_id: args.job.requestId,
+      tower: args.job.tower,
       publish_at: args.publishAt,
-    })),
+    },
     ...(args.draftWrap ? { draft_wrap: args.draftWrap } : {}),
     drand: { chain: QUICKNET.chainHash, genesis: QUICKNET.genesis, period: QUICKNET.period },
   }

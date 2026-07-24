@@ -1,23 +1,23 @@
 import type { Event } from '@lastpub/core'
 
-/** Relay set + the towers the client talks to (more than one = redundancy). */
+/** Relay set + the tower the client talks to. */
 export type Settings = {
   relays: string[]
-  towerNpubs: string[]
+  towerNpub: string
 }
 
-/** Where one message's capsule is scheduled: a request id per tower. */
+/** Where one message's capsule is scheduled: the tower and its request id. */
 export type Placement = {
   towerPub: string // hex
   requestId: string
 }
 
-/** A message: its own recipient, draft, capsule and a 5905 job per tower. */
+/** A message: its own recipient, draft, capsule and a 5905 job at one tower. */
 export type MessageData = {
   id: string
   recipient: string // hex
-  /** One scheduled job per tower (redundancy): if any tower survives, it fires. */
-  placements: Placement[]
+  /** The scheduled job (tower + request id). */
+  placement: Placement
   wrap: Event
   /** Ephemeral secret of the current wrap (retained; wraps sign with a throwaway key). */
   wrapEphemeralKey: string
@@ -29,15 +29,19 @@ export type MessageData = {
 /** The switch: time model + check-in anchor. One switch per npub. */
 export type SwitchData = {
   switchId: string
-  /** Tower pubkeys (hex), fixed at creation — independent of later settings changes. */
-  towerPubs: string[]
+  /** Tower pubkey (hex), the one this switch is currently scheduled with. */
+  towerPub: string
   interval: number
   lastCheckinAt: number
   publishAt: number
   messages: MessageData[]
 }
 
-/** A signed job (+ optional cancel of the old one) for one tower. */
+/**
+ * A signed job for the current tower, plus an optional cancel of the previous
+ * job. On migration the cancel targets the *old* tower (carried in its own p
+ * tag) while the job targets the new one, so both can differ.
+ */
 export type PendingPlacement = {
   towerPub: string
   job: Event
@@ -47,12 +51,12 @@ export type PendingPlacement = {
 /**
  * Journal for the success rule (§4.3): fully signed stage-5 events are
  * persisted before sending — a retry repeats only stage 5, without a new
- * NIP-07 cycle. One entry per message, each with a job per tower.
+ * NIP-07 cycle. One entry per message, each with its job at the tower.
  */
 export type PendingItem = {
   messageId: string
   recipient: string
-  placements: PendingPlacement[]
+  placement: PendingPlacement
   wrap: Event
   wrapEphemeralKey: string
   draftWrap: Event
